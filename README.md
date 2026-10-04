@@ -19,13 +19,31 @@ Files are edited in place: only themed keys change, everything else
 
 ## Build
 
-Dependencies: CMake ≥ 3.20, a C11 compiler, GLib/GIO ≥ 2.76, libxml2.
+Dependencies: CMake ≥ 3.20, a C11 compiler, GLib/GIO ≥ 2.76, libxml2,
+cairo, pango, gdk-pixbuf, librsvg ≥ 2.52, and GTK ≥ 4.12 for the
+application (`-DLXP_BUILD_GUI=OFF` builds only the library and `lxp`).
 
 ```sh
 cmake -S . -B build -G Ninja
 cmake --build build
 ctest --test-dir build
+./build/bin/lxqt-personalizer   # the application
 ```
+
+## Application
+
+`lxqt-personalizer` ("Desktop Themes") shows every installed theme with a
+live mockup of the desktop it produces — wallpaper, Openbox window
+decorations, Qt palette and fonts, icons, panel — next to the current
+desktop. **Try** applies a theme and reverts after 15 seconds unless you
+keep it; **Apply** applies it; the header bar saves the current desktop as
+a theme and undoes the last change.
+
+Changes are made by running `lxp` in a separate process, so a try still
+reverts if the application crashes or is closed.
+
+`LXP_SCREENSHOT=shot.png lxqt-personalizer` saves a screenshot of the window
+and quits.
 
 ## Usage
 
@@ -34,6 +52,7 @@ lxp backends                 # supported components and the files they manage
 lxp capture "My Theme"       # save the current look as a theme
 lxp list                     # installed themes
 lxp show my-theme            # print a theme manifest
+lxp preview my-theme -o shot.png   # render the mockup (--current: this desktop)
 lxp apply my-theme --try 15  # apply, revert unless confirmed within 15 s
 lxp apply my-theme --only openbox,cursor
 lxp reload                   # make running programs reread their config
@@ -60,7 +79,9 @@ in `~/.local/state/lxqt-personalizer/snapshots/`.
 ```
 src/core/           liblxp: theme model, snapshots, backends (no GUI)
 src/core/backends/  one file per desktop component
+src/preview/        mockup renderer (cairo/pango, no GTK), icon theme lookup
 src/cli/            the `lxp` command
+src/gui/            the GTK 4 application
 tests/              GLib tests with isolated XDG directories
 ```
 

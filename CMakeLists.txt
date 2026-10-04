@@ -14,11 +14,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(LXP_BUILD_TESTS "Build the test suite" ON)
+option(LXP_BUILD_GUI "Build the GTK 4 application" ON)
 
 include(GNUInstallDirs)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0>=2.76 gio-2.0>=2.76)
 pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0)
+pkg_check_modules(PREVIEW REQUIRED IMPORTED_TARGET cairo pangocairo gdk-pixbuf-2.0 librsvg-2.0>=2.52)
 
 add_compile_options(
     -Wall -Wextra -Wshadow -Wformat=2 -Wmissing-prototypes
@@ -26,8 +28,15 @@ add_compile_options(
 
 configure_file(config.h.in ${CMAKE_BINARY_DIR}/config.h)
 
+# All programs land in bin/ so the GUI finds lxp next to itself.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 add_subdirectory(src/core)
+add_subdirectory(src/preview)
 add_subdirectory(src/cli)
+if(LXP_BUILD_GUI)
+    add_subdirectory(src/gui)
+endif()
 
 if(LXP_BUILD_TESTS)
     enable_testing()

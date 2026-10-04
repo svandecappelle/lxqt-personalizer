@@ -1,0 +1,813 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+#include "lxp-window.h"
+
+#include "lxp-apply.h"
+#include "lxp-fileutil.h"
+#include "lxp-paths.h"
+#include "lxp-preview-area.h"
+#include "lxp-runner.h"
+
+#include <stdlib.h>
+
+#define TRY_SECONDS 15
+
+/* A gallery entry: an installed theme, or the current desktop (dir NULL). */
+typedef struct {
+    char *dir;
+    LxpTheme *theme;
+} Entry;
+
+struct _LxpWindow {
+    GtkApplicationWindow parent;
+
+    GtkWidget *gallery;
+    GtkWidget *preview;
+    GtkWidget *swatches;
+    GtkWidget *title;
+    GtkWidget *subtitle;
+    GtkWidget *details;
+    GtkWidget *apply_button;
+    GtkWidget *try_button;
+    GtkWidget *delete_button;
+    GtkWidget *save_button;
+    GtkWidget *spinner;
+    GtkWidget *banner;
+    GtkWidget *banner_label;
+
+    GPtrArray *entries;
+    Entry *selected;
+
+    LxpRunner *runner;
+    char *result;            /* last porcelain result: "kept", "reverted" */
+    char *running_name;      /* theme being applied */
+    gboolean running_try;
+
+    GtkWidget *confirm;
+    GtkWidget *confirm_label;
+    guint confirm_timer;
+    int remaining;
+};
+
+G_DEFINE_FINAL_TYPE(LxpWindow, lxp_window, GTK_TYPE_APPLICATION_WINDOW)
+
+static void entry_free(Entry *e)
+{
+    g_free(e->dir);
+    lxp_theme_free(e->theme);
+    g_free(e);
+}
+
+/* --- banner ------------------------------------------------------------- */
+
+static void show_banner(LxpWindow *win, const char *message, gboolean error)
+{
+    gtk_label_set_text(GTK_LABEL(win->banner_label), message);
+    if (error) {
+        gtk_widget_add_css_class(win->banner, "error");
+        gtk_widget_remove_css_class(win->banner, "info");
+    } else {
+        gtk_widget_add_css_class(win->banner, "info");
+        gtk_widget_remove_css_class(win->banner, "error");
+    }
+    gtk_revealer_set_reveal_child(GTK_REVEALER(win->banner), TRUE);
+}
+
+static void hide_banner(LxpWindow *win)
+{
+    gtk_revealer_set_reveal_child(GTK_REVEALER(win->banner), FALSE);
+}
+
+/* --- details pane ------------------------------------------------------- */
+
+static void swatches_draw(GtkDrawingArea *area, cairo_t *cr, int width, int height,
+                          gpointer user)
+{
+    LxpWindow *win = user;
+    g_autoptr(LxpPreviewModel) m = NULL;
+    const LxpColor *colors[7];
+    double w;
+
+    if (!win->selected)
+        return;
+    m = lxp_preview_model_new(win->selected->theme);
+    colors[0] = &m->window;
+    colors[1] = &m->base;
+    colors[2] = &m->text;
+    colors[3] = &m->highlight;
+    colors[4] = &m->link;
+    colors[5] = &m->active.title_bg;
+    colors[6] = &m->panel_bg;
+    w = (double)width / G_N_ELEMENTS(colors);
+
+    for (gsize i = 0; i < G_N_ELEMENTS(colors); i++) {
+        cairo_set_source_rgb(cr, colors[i]->r, colors[i]->g, colors[i]->b);
+        cairo_rectangle(cr, i * w + 2, 0, w - 4, height);
+        cairo_fill(cr);
+    }
+}
+
+static char *describe(const LxpTheme *theme, const char *group)
+{
+    GKeyFile *kf = lxp_theme_get_keyfile(theme);
+    g_autofree char *a = NULL, *b = NULL, *c = NULL;
+
+#define GET(var, key) var = lxp_theme_get_string(theme, group, key)
+    if (!g_key_file_has_group(kf, group))
+        return NULL;
+
+    if (g_str_equal(group, "LXQt")) {
+        GET(a, "theme"); GET(b, "icon_theme"); GET(c, "style");
+        return g_strdup_printf("%s theme · %s icons · %s style",
+                               a ? a : "default", b ? b : "default", c ? c : "default");
+    }
+    if (g_str_equal(group, "Openbox")) {
+        GET(a, "theme"); GET(b, "title_layout");
+        return g_strdup_printf("%s · buttons %s", a ? a : "default", b ? b : "NLIMC");
+    }
+    if (g_str_equal(group, "GTK")) {
+        GET(a, "theme"); GET(b, "icon_theme"); GET(c, "font");
+        return g_strdup_printf("%s · %s icons · %s", a ? a : "default",
+                               b ? b : "default", c ? c : "default font");
+    }
+    if (g_str_equal(group, "Cursor")) {
+        GET(a, "theme"); GET(b, "size");
+        return g_strdup_printf("%s, %s px", a ? a : "default", b ? b : "default");
+    }
+    if (g_str_equal(group, "Wallpaper")) {
+        g_autofree char *base = NULL;
+        GET(a, "file"); GET(b, "mode");
+        base = a ? g_path_get_basename(a) : g_strdup("none");
+        return g_strdup_printf("%s (%s)", base, b ? b : "zoom");
+    }
+    if (g_str_equal(group, "Panel")) {
+        GET(a, "position"); GET(b, "panelSize"); GET(c, "opacity");
+        return g_strdup_printf("%s, %s px, %s%% opaque", a ? a : "Bottom",
+                               b ? b : "32", c ? c : "100");
+    }
+#undef GET
+    return NULL;
+}
+
+static void update_details(LxpWindow *win)
+{
+    static const char *const groups[] = {
+        "LXQt", "Openbox", "GTK", "Cursor", "Wallpaper", "Panel",
+    };
+    Entry *e = win->selected;
+    GtkWidget *child;
+    int row = 0;
+    gboolean idle = win->runner == NULL;
+
+    while ((child = gtk_widget_get_first_child(win->details)))
+        gtk_grid_remove(GTK_GRID(win->details), child);
+
+    if (!e) {
+        gtk_label_set_text(GTK_LABEL(win->title), "");
+        gtk_label_set_text(GTK_LABEL(win->subtitle), "");
+        lxp_preview_area_set_model(win->preview, NULL);
+        return;
+    }
+
+    gtk_label_set_text(GTK_LABEL(win->title), lxp_theme_get_name(e->theme));
+    if (e->dir) {
+        g_autofree char *author = lxp_theme_get_string(e->theme, LXP_THEME_GROUP, "Author");
+        g_autofree char *sub = author ? g_strdup_printf("by %s — %s", author, e->dir)
+                                      : g_strdup(e->dir);
+        gtk_label_set_text(GTK_LABEL(win->subtitle), sub);
+    } else {
+        gtk_label_set_text(GTK_LABEL(win->subtitle),
+                           "What your desktop looks like right now");
+    }
+    lxp_preview_area_set_model(win->preview, lxp_preview_model_new(e->theme));
+    gtk_widget_queue_draw(win->swatches);
+
+    for (gsize i = 0; i < G_N_ELEMENTS(groups); i++) {
+        g_autofree char *text = describe(e->theme, groups[i]);
+        GtkWidget *key, *value;
+
+        if (!text)
+            continue;
+        key = gtk_label_new(groups[i]);
+        gtk_label_set_xalign(GTK_LABEL(key), 1);
+        gtk_widget_add_css_class(key, "dim-label");
+        value = gtk_label_new(text);
+        gtk_label_set_xalign(GTK_LABEL(value), 0);
+        gtk_label_set_ellipsize(GTK_LABEL(value), PANGO_ELLIPSIZE_END);
+        gtk_label_set_selectable(GTK_LABEL(value), TRUE);
+        gtk_grid_attach(GTK_GRID(win->details), key, 0, row, 1, 1);
+        gtk_grid_attach(GTK_GRID(win->details), value, 1, row, 1, 1);
+        row++;
+    }
+
+    gtk_widget_set_visible(win->apply_button, e->dir != NULL);
+    gtk_widget_set_visible(win->try_button, e->dir != NULL);
+    gtk_widget_set_visible(win->delete_button, e->dir != NULL);
+    gtk_widget_set_visible(win->save_button, e->dir == NULL);
+    gtk_widget_set_sensitive(win->apply_button, idle);
+    gtk_widget_set_sensitive(win->try_button, idle);
+    gtk_widget_set_sensitive(win->delete_button, idle);
+}
+
+/* --- gallery ------------------------------------------------------------ */
+
+static GtkWidget *make_card(Entry *e)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *area = lxp_preview_area_new(208, 130);
+    GtkWidget *label = gtk_label_new(lxp_theme_get_name(e->theme));
+
+    lxp_preview_area_set_model(area, lxp_preview_model_new(e->theme));
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_max_width_chars(GTK_LABEL(label), 24);
+    if (!e->dir)
+        gtk_widget_add_css_class(label, "heading");
+    gtk_box_append(GTK_BOX(box), area);
+    gtk_box_append(GTK_BOX(box), label);
+    gtk_widget_add_css_class(box, "theme-card");
+    return box;
+}
+
+/* Rebuild the gallery; select the theme in <select_dir> (NULL: current desktop). */
+static void reload_gallery(LxpWindow *win, const char *select_dir)
+{
+    g_autoptr(GPtrArray) names = lxp_theme_list_installed();
+    g_autoptr(GPtrArray) failures = g_ptr_array_new_with_free_func((GDestroyNotify)g_error_free);
+    g_autofree char *keep = g_strdup(select_dir);
+    Entry *current = g_new0(Entry, 1);
+    GtkFlowBoxChild *to_select = NULL;
+
+    win->selected = NULL;
+    gtk_flow_box_remove_all(GTK_FLOW_BOX(win->gallery));
+    g_ptr_array_set_size(win->entries, 0);
+
+    current->theme = lxp_capture_current("Current desktop", NULL, failures);
+    g_ptr_array_add(win->entries, current);
+
+    for (guint i = 0; i < names->len; i++) {
+        g_autoptr(GError) error = NULL;
+        g_autofree char *dir = lxp_theme_resolve(g_ptr_array_index(names, i), NULL);
+        LxpTheme *theme = dir ? lxp_theme_load(dir, &error) : NULL;
+        Entry *e;
+
+        if (!theme) {
+            g_warning("Skipping theme %s: %s", (char *)g_ptr_array_index(names, i),
+                      error ? error->message : "not found");
+            continue;
+        }
+        e = g_new0(Entry, 1);
+        e->dir = g_steal_pointer(&dir);
+        e->theme = theme;
+        g_ptr_array_add(win->entries, e);
+    }
+
+    for (guint i = 0; i < win->entries->len; i++) {
+        Entry *e = g_ptr_array_index(win->entries, i);
+        GtkWidget *card = make_card(e);
+        GtkFlowBoxChild *child;
+
+        gtk_flow_box_append(GTK_FLOW_BOX(win->gallery), card);
+        child = GTK_FLOW_BOX_CHILD(gtk_widget_get_parent(card));
+        g_object_set_data(G_OBJECT(child), "lxp-entry", e);
+        if (g_strcmp0(e->dir, keep) == 0)
+            to_select = child;
+    }
+    if (to_select)
+        gtk_flow_box_select_child(GTK_FLOW_BOX(win->gallery), to_select);
+}
+
+static void on_selection_changed(GtkFlowBox *box, gpointer user)
+{
+    LxpWindow *win = user;
+    GList *selected = gtk_flow_box_get_selected_children(box);
+
+    win->selected = selected ? g_object_get_data(selected->data, "lxp-entry") : NULL;
+    g_list_free(selected);
+    update_details(win);
+}
+
+/* --- running lxp ---------------------------------------------------------- */
+
+static void set_busy(LxpWindow *win, gboolean busy)
+{
+    gtk_widget_set_visible(win->spinner, busy);
+    gtk_spinner_set_spinning(GTK_SPINNER(win->spinner), busy);
+    gtk_widget_action_set_enabled(GTK_WIDGET(win), "win.undo", !busy);
+    gtk_widget_action_set_enabled(GTK_WIDGET(win), "win.reload-desktop", !busy);
+    update_details(win);
+}
+
+static void close_confirm(LxpWindow *win)
+{
+    g_clear_handle_id(&win->confirm_timer, g_source_remove);
+    if (win->confirm) {
+        GtkWidget *confirm = g_steal_pointer(&win->confirm);
+        gtk_window_destroy(GTK_WINDOW(confirm));
+    }
+}
+
+static void answer_try(LxpWindow *win, gboolean keep)
+{
+    if (win->runner)
+        lxp_runner_send(win->runner, keep ? "y" : "n");
+    if (win->confirm) {
+        gtk_label_set_text(GTK_LABEL(win->confirm_label),
+                           keep ? "Keeping the changes…" : "Reverting…");
+        g_clear_handle_id(&win->confirm_timer, g_source_remove);
+    }
+}
+
+static void on_keep(GtkButton *button, gpointer user)   { answer_try(user, TRUE); }
+static void on_revert(GtkButton *button, gpointer user) { answer_try(user, FALSE); }
+
+static gboolean on_confirm_close(GtkWindow *window, gpointer user)
+{
+    answer_try(user, FALSE);
+    return TRUE;  /* stays until lxp reports back */
+}
+
+static gboolean confirm_tick(gpointer user)
+{
+    LxpWindow *win = user;
+    g_autofree char *text = NULL;
+
+    if (--win->remaining <= 0) {
+        gtk_label_set_text(GTK_LABEL(win->confirm_label), "Reverting…");
+        win->confirm_timer = 0;
+        return G_SOURCE_REMOVE;
+    }
+    text = g_strdup_printf("The previous look comes back in %d seconds "
+                           "unless you keep it.", win->remaining);
+    gtk_label_set_text(GTK_LABEL(win->confirm_label), text);
+    return G_SOURCE_CONTINUE;
+}
+
+static void show_confirm(LxpWindow *win, int seconds)
+{
+    GtkWidget *window = gtk_window_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *heading = gtk_label_new("Keep this look?");
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *revert = gtk_button_new_with_mnemonic("_Revert");
+    GtkWidget *keep = gtk_button_new_with_mnemonic("_Keep Changes");
+
+    close_confirm(win);
+    win->remaining = seconds + 1;
+    win->confirm = window;
+    win->confirm_label = gtk_label_new(NULL);
+    confirm_tick(win);
+
+    gtk_window_set_title(GTK_WINDOW(window), "Try Theme");
+    gtk_window_set_transient_for(GTK_WINDOW(window), GTK_WINDOW(win));
+    gtk_window_set_modal(GTK_WINDOW(window), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
+    g_signal_connect(window, "close-request", G_CALLBACK(on_confirm_close), win);
+
+    gtk_widget_add_css_class(heading, "title-2");
+    gtk_label_set_wrap(GTK_LABEL(win->confirm_label), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(win->confirm_label), 36);
+    gtk_widget_add_css_class(keep, "suggested-action");
+    g_signal_connect(revert, "clicked", G_CALLBACK(on_revert), win);
+    g_signal_connect(keep, "clicked", G_CALLBACK(on_keep), win);
+
+    gtk_widget_set_halign(buttons, GTK_ALIGN_END);
+    gtk_box_append(GTK_BOX(buttons), revert);
+    gtk_box_append(GTK_BOX(buttons), keep);
+    gtk_widget_set_margin_top(box, 18);
+    gtk_widget_set_margin_bottom(box, 18);
+    gtk_widget_set_margin_start(box, 18);
+    gtk_widget_set_margin_end(box, 18);
+    gtk_box_append(GTK_BOX(box), heading);
+    gtk_box_append(GTK_BOX(box), win->confirm_label);
+    gtk_box_append(GTK_BOX(box), buttons);
+    gtk_window_set_child(GTK_WINDOW(window), box);
+    gtk_window_set_default_widget(GTK_WINDOW(window), keep);
+
+    win->confirm_timer = g_timeout_add_seconds(1, confirm_tick, win);
+    gtk_window_present(GTK_WINDOW(window));
+}
+
+static void on_runner_event(LxpRunner *runner, const char *event, const char *arg,
+                            gpointer user)
+{
+    LxpWindow *win = user;
+
+    if (g_str_equal(event, "confirm")) {
+        show_confirm(win, atoi(arg));
+    } else if (g_str_equal(event, "kept") || g_str_equal(event, "reverted")) {
+        g_free(win->result);
+        win->result = g_strdup(event);
+    }
+}
+
+static void on_runner_done(LxpRunner *runner, const GError *error, const char *warnings,
+                           gpointer user)
+{
+    LxpWindow *win = user;
+    g_autofree char *message = NULL;
+    g_autofree char *select = win->selected ? g_strdup(win->selected->dir) : NULL;
+
+    win->runner = NULL;
+    close_confirm(win);
+
+    if (error) {
+        message = g_strdup(error->message);
+    } else if (g_strcmp0(win->result, "reverted") == 0) {
+        message = g_strdup("The previous look was restored.");
+    } else if (win->running_name) {
+        message = g_strdup_printf(win->running_try ? "Kept “%s”." : "Applied “%s”.",
+                                  win->running_name);
+    } else {
+        message = g_strdup("Done.");
+    }
+    if (!error && *warnings) {
+        char *full = g_strdup_printf("%s\n%s", message, warnings);
+        g_free(message);
+        message = full;
+    }
+    show_banner(win, message, error != NULL);
+
+    g_clear_pointer(&win->result, g_free);
+    g_clear_pointer(&win->running_name, g_free);
+    reload_gallery(win, select);
+    set_busy(win, FALSE);
+}
+
+static void run_lxp(LxpWindow *win, const char *const *args, const char *theme_name,
+                    gboolean try_mode)
+{
+    g_autoptr(GError) error = NULL;
+
+    if (win->runner)
+        return;
+    hide_banner(win);
+    win->runner = lxp_runner_start(args, on_runner_event, on_runner_done, win, &error);
+    if (!win->runner) {
+        show_banner(win, error->message, TRUE);
+        return;
+    }
+    win->running_name = g_strdup(theme_name);
+    win->running_try = try_mode;
+    set_busy(win, TRUE);
+}
+
+static void start_apply(LxpWindow *win, gboolean try_mode)
+{
+    g_autofree char *seconds = g_strdup_printf("%d", TRY_SECONDS);
+
+    if (!win->selected || !win->selected->dir)
+        return;
+    {
+        /* Without --try, the NULL ends the list before <seconds>. */
+        const char *args[] = { "apply", win->selected->dir, "--porcelain",
+                               try_mode ? "--try" : NULL, seconds, NULL };
+        run_lxp(win, args, lxp_theme_get_name(win->selected->theme), try_mode);
+    }
+}
+
+static void on_apply(GtkButton *b, gpointer user) { start_apply(user, FALSE); }
+static void on_try(GtkButton *b, gpointer user)   { start_apply(user, TRUE); }
+
+static void undo_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    const char *args[] = { "rollback", NULL };
+    run_lxp(LXP_WINDOW(widget), args, NULL, FALSE);
+}
+
+static void reload_desktop_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    const char *args[] = { "reload", NULL };
+    run_lxp(LXP_WINDOW(widget), args, NULL, FALSE);
+}
+
+static void refresh_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    LxpWindow *win = LXP_WINDOW(widget);
+    g_autofree char *select = win->selected ? g_strdup(win->selected->dir) : NULL;
+
+    reload_gallery(win, select);
+}
+
+/* --- save current desktop ------------------------------------------------ */
+
+static void save_theme(LxpWindow *win, GtkWidget *dialog, GtkWidget *entry)
+{
+    const char *name = gtk_editable_get_text(GTK_EDITABLE(entry));
+    g_autofree char *themes = lxp_paths_themes_dir();
+    g_autofree char *slug = NULL;
+    g_autofree char *dir = NULL;
+    g_autofree char *manifest = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    g_autoptr(GError) error = NULL;
+
+    if (!*g_strstrip((char *)name))
+        return;
+    slug = lxp_theme_slugify(name);
+    dir = g_build_filename(themes, slug, NULL);
+    manifest = g_build_filename(dir, LXP_THEME_MANIFEST, NULL);
+    if (g_file_test(manifest, G_FILE_TEST_EXISTS)) {
+        show_banner(win, "A theme with this name already exists.", TRUE);
+        return;
+    }
+
+    theme = lxp_capture_current(name, NULL, NULL);
+    if (!lxp_theme_save(theme, dir, &error)) {
+        show_banner(win, error->message, TRUE);
+        return;
+    }
+    gtk_window_destroy(GTK_WINDOW(dialog));
+    reload_gallery(win, dir);
+    show_banner(win, "Saved the current desktop as a new theme.", FALSE);
+}
+
+static void on_save_confirmed(GtkWidget *widget, gpointer user)
+{
+    GtkWidget *dialog = GTK_WIDGET(gtk_widget_get_root(widget));
+    save_theme(user, dialog, g_object_get_data(G_OBJECT(dialog), "lxp-entry"));
+}
+
+static void save_current_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    LxpWindow *win = LXP_WINDOW(widget);
+    GtkWidget *dialog = gtk_window_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *label = gtk_label_new("Save the current desktop as a theme named:");
+    GtkWidget *entry = gtk_entry_new();
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *save = gtk_button_new_with_mnemonic("_Save");
+    GtkWidget *cancel = gtk_button_new_with_mnemonic("_Cancel");
+
+    gtk_window_set_title(GTK_WINDOW(dialog), "Save Theme");
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(win));
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
+    g_object_set_data(G_OBJECT(dialog), "lxp-entry", entry);
+
+    gtk_label_set_xalign(GTK_LABEL(label), 0);
+    gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+    gtk_editable_set_text(GTK_EDITABLE(entry), "My Theme");
+    gtk_widget_add_css_class(save, "suggested-action");
+    g_signal_connect(save, "clicked", G_CALLBACK(on_save_confirmed), win);
+    g_signal_connect_swapped(cancel, "clicked", G_CALLBACK(gtk_window_destroy), dialog);
+
+    gtk_widget_set_halign(buttons, GTK_ALIGN_END);
+    gtk_box_append(GTK_BOX(buttons), cancel);
+    gtk_box_append(GTK_BOX(buttons), save);
+    gtk_widget_set_margin_top(box, 18);
+    gtk_widget_set_margin_bottom(box, 18);
+    gtk_widget_set_margin_start(box, 18);
+    gtk_widget_set_margin_end(box, 18);
+    gtk_box_append(GTK_BOX(box), label);
+    gtk_box_append(GTK_BOX(box), entry);
+    gtk_box_append(GTK_BOX(box), buttons);
+    gtk_window_set_child(GTK_WINDOW(dialog), box);
+    gtk_window_set_default_widget(GTK_WINDOW(dialog), save);
+    gtk_window_present(GTK_WINDOW(dialog));
+    gtk_widget_grab_focus(entry);
+}
+
+/* --- delete ------------------------------------------------------------- */
+
+static void delete_response(GObject *source, GAsyncResult *res, gpointer user)
+{
+    LxpWindow *win = user;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *dir = NULL;
+    int button = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(source), res, NULL);
+
+    if (button != 1 || !win->selected || !win->selected->dir)
+        return;
+    dir = g_strdup(win->selected->dir);
+    if (!lxp_remove_tree(dir, &error)) {
+        show_banner(win, error->message, TRUE);
+        return;
+    }
+    reload_gallery(win, NULL);
+    show_banner(win, "Theme deleted.", FALSE);
+}
+
+static void on_delete(GtkButton *button, gpointer user)
+{
+    LxpWindow *win = user;
+    g_autoptr(GtkAlertDialog) dialog = NULL;
+    const char *buttons[] = { "_Cancel", "_Delete", NULL };
+
+    if (!win->selected || !win->selected->dir)
+        return;
+    dialog = gtk_alert_dialog_new("Delete “%s”?", lxp_theme_get_name(win->selected->theme));
+    gtk_alert_dialog_set_detail(dialog, "The theme folder and everything in it will be "
+                                        "removed. Your desktop is not changed.");
+    gtk_alert_dialog_set_buttons(dialog, buttons);
+    gtk_alert_dialog_set_cancel_button(dialog, 0);
+    gtk_alert_dialog_set_default_button(dialog, 0);
+    gtk_alert_dialog_choose(dialog, GTK_WINDOW(win), NULL, delete_response, win);
+}
+
+/* --- construction ------------------------------------------------------- */
+
+static GtkWidget *build_header(LxpWindow *win)
+{
+    GtkWidget *header = gtk_header_bar_new();
+    GtkWidget *save = gtk_button_new_from_icon_name("document-save-as-symbolic");
+    GtkWidget *undo = gtk_button_new_from_icon_name("edit-undo-symbolic");
+    GtkWidget *menu_button = gtk_menu_button_new();
+    g_autoptr(GMenu) menu = g_menu_new();
+
+    gtk_widget_set_tooltip_text(save, "Save the current desktop as a theme");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(save), "win.save-current");
+    gtk_widget_set_tooltip_text(undo, "Undo the last change to the desktop");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(undo), "win.undo");
+
+    g_menu_append(menu, "_Refresh Themes", "win.refresh");
+    g_menu_append(menu, "Re_load Desktop", "win.reload-desktop");
+    g_menu_append(menu, "_About", "app.about");
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menu_button), "open-menu-symbolic");
+    gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_button), G_MENU_MODEL(menu));
+
+    win->spinner = gtk_spinner_new();
+    gtk_widget_set_visible(win->spinner, FALSE);
+
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), save);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), undo);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), menu_button);
+    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), win->spinner);
+    return header;
+}
+
+static GtkWidget *build_banner(LxpWindow *win)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget *close = gtk_button_new_from_icon_name("window-close-symbolic");
+
+    win->banner_label = gtk_label_new(NULL);
+    gtk_label_set_wrap(GTK_LABEL(win->banner_label), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(win->banner_label), 0);
+    gtk_widget_set_hexpand(win->banner_label, TRUE);
+    gtk_widget_add_css_class(close, "flat");
+    g_signal_connect_swapped(close, "clicked", G_CALLBACK(hide_banner), win);
+    gtk_box_append(GTK_BOX(box), win->banner_label);
+    gtk_box_append(GTK_BOX(box), close);
+    gtk_widget_add_css_class(box, "banner");
+
+    win->banner = gtk_revealer_new();
+    gtk_revealer_set_child(GTK_REVEALER(win->banner), box);
+    return win->banner;
+}
+
+static GtkWidget *build_details(LxpWindow *win)
+{
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+
+    win->preview = lxp_preview_area_new(640, 400);
+    gtk_widget_set_vexpand(win->preview, TRUE);
+    gtk_widget_set_hexpand(win->preview, TRUE);
+
+    win->title = gtk_label_new(NULL);
+    gtk_widget_add_css_class(win->title, "title-1");
+    gtk_label_set_xalign(GTK_LABEL(win->title), 0);
+    win->subtitle = gtk_label_new(NULL);
+    gtk_widget_add_css_class(win->subtitle, "dim-label");
+    gtk_label_set_xalign(GTK_LABEL(win->subtitle), 0);
+    gtk_label_set_ellipsize(GTK_LABEL(win->subtitle), PANGO_ELLIPSIZE_MIDDLE);
+
+    win->swatches = gtk_drawing_area_new();
+    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(win->swatches), 18);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(win->swatches), swatches_draw, win, NULL);
+    gtk_widget_set_tooltip_text(win->swatches, "Window, base, text, highlight, link, "
+                                               "title bar and panel colors");
+
+    win->details = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(win->details), 4);
+    gtk_grid_set_column_spacing(GTK_GRID(win->details), 12);
+
+    win->delete_button = gtk_button_new_with_mnemonic("_Delete");
+    gtk_widget_add_css_class(win->delete_button, "destructive-action");
+    g_signal_connect(win->delete_button, "clicked", G_CALLBACK(on_delete), win);
+    win->save_button = gtk_button_new_with_mnemonic("_Save as Theme…");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(win->save_button), "win.save-current");
+    win->try_button = gtk_button_new_with_mnemonic("_Try");
+    gtk_widget_set_tooltip_text(win->try_button, "Apply now and revert automatically "
+                                                 "unless confirmed");
+    g_signal_connect(win->try_button, "clicked", G_CALLBACK(on_try), win);
+    win->apply_button = gtk_button_new_with_mnemonic("_Apply");
+    gtk_widget_add_css_class(win->apply_button, "suggested-action");
+    g_signal_connect(win->apply_button, "clicked", G_CALLBACK(on_apply), win);
+
+    gtk_widget_set_hexpand(spacer, TRUE);
+    gtk_box_append(GTK_BOX(actions), win->delete_button);
+    gtk_box_append(GTK_BOX(actions), spacer);
+    gtk_box_append(GTK_BOX(actions), win->save_button);
+    gtk_box_append(GTK_BOX(actions), win->try_button);
+    gtk_box_append(GTK_BOX(actions), win->apply_button);
+
+    gtk_widget_set_margin_top(box, 18);
+    gtk_widget_set_margin_bottom(box, 18);
+    gtk_widget_set_margin_start(box, 18);
+    gtk_widget_set_margin_end(box, 18);
+    gtk_box_append(GTK_BOX(box), win->preview);
+    gtk_box_append(GTK_BOX(box), win->title);
+    gtk_box_append(GTK_BOX(box), win->subtitle);
+    gtk_box_append(GTK_BOX(box), win->swatches);
+    gtk_box_append(GTK_BOX(box), win->details);
+    gtk_box_append(GTK_BOX(box), actions);
+    return box;
+}
+
+static void lxp_window_dispose(GObject *object)
+{
+    LxpWindow *win = LXP_WINDOW(object);
+
+    close_confirm(win);
+    G_OBJECT_CLASS(lxp_window_parent_class)->dispose(object);
+}
+
+static void lxp_window_finalize(GObject *object)
+{
+    LxpWindow *win = LXP_WINDOW(object);
+
+    g_ptr_array_unref(win->entries);
+    g_free(win->result);
+    g_free(win->running_name);
+    G_OBJECT_CLASS(lxp_window_parent_class)->finalize(object);
+}
+
+static gboolean on_close_request(GtkWindow *window, gpointer user)
+{
+    LxpWindow *win = LXP_WINDOW(window);
+
+    /* Closing during a try reverts; lxp finishes on its own either way. */
+    if (win->runner)
+        lxp_runner_send(win->runner, "n");
+    return FALSE;
+}
+
+static void lxp_window_class_init(LxpWindowClass *klass)
+{
+    GObjectClass *object_class = G_OBJECT_CLASS(klass);
+    GtkWidgetClass *widget_class = GTK_WIDGET_CLASS(klass);
+
+    object_class->dispose = lxp_window_dispose;
+    object_class->finalize = lxp_window_finalize;
+
+    gtk_widget_class_install_action(widget_class, "win.save-current", NULL,
+                                    save_current_activated);
+    gtk_widget_class_install_action(widget_class, "win.undo", NULL, undo_activated);
+    gtk_widget_class_install_action(widget_class, "win.reload-desktop", NULL,
+                                    reload_desktop_activated);
+    gtk_widget_class_install_action(widget_class, "win.refresh", NULL, refresh_activated);
+    gtk_widget_class_add_binding_action(widget_class, GDK_KEY_F5, 0, "win.refresh", NULL);
+    gtk_widget_class_add_binding_action(widget_class, GDK_KEY_z, GDK_CONTROL_MASK,
+                                        "win.undo", NULL);
+}
+
+static void lxp_window_init(LxpWindow *win)
+{
+    GtkWidget *outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    GtkWidget *scroller = gtk_scrolled_window_new();
+
+    win->entries = g_ptr_array_new_with_free_func((GDestroyNotify)entry_free);
+
+    gtk_window_set_title(GTK_WINDOW(win), "Desktop Themes");
+    gtk_window_set_default_size(GTK_WINDOW(win), 1240, 780);
+    gtk_window_set_titlebar(GTK_WINDOW(win), build_header(win));
+    g_signal_connect(win, "close-request", G_CALLBACK(on_close_request), NULL);
+
+    win->gallery = gtk_flow_box_new();
+    gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(win->gallery), GTK_SELECTION_BROWSE);
+    gtk_flow_box_set_homogeneous(GTK_FLOW_BOX(win->gallery), TRUE);
+    gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(win->gallery), 2);
+    gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(win->gallery), 6);
+    gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(win->gallery), 6);
+    gtk_widget_set_valign(win->gallery, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(win->gallery, 12);
+    gtk_widget_set_margin_bottom(win->gallery, 12);
+    gtk_widget_set_margin_start(win->gallery, 12);
+    gtk_widget_set_margin_end(win->gallery, 12);
+    g_signal_connect(win->gallery, "selected-children-changed",
+                     G_CALLBACK(on_selection_changed), win);
+
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), win->gallery);
+    gtk_widget_set_size_request(scroller, 260, -1);
+
+    gtk_paned_set_start_child(GTK_PANED(paned), scroller);
+    gtk_paned_set_end_child(GTK_PANED(paned), build_details(win));
+    gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_resize_start_child(GTK_PANED(paned), FALSE);
+    gtk_paned_set_position(GTK_PANED(paned), 500);
+    gtk_widget_set_vexpand(paned, TRUE);
+
+    gtk_box_append(GTK_BOX(outer), build_banner(win));
+    gtk_box_append(GTK_BOX(outer), paned);
+    gtk_window_set_child(GTK_WINDOW(win), outer);
+
+    reload_gallery(win, NULL);
+}
+
+LxpWindow *lxp_window_new(GtkApplication *app)
+{
+    return g_object_new(LXP_TYPE_WINDOW, "application", app, NULL);
+}

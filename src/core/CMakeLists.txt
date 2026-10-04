@@ -5,8 +5,10 @@ add_library(lxp STATIC
     lxp-ini.c
     lxp-system.c
     lxp-theme.c
+    lxp-themerc.c
     lxp-apply.c
     lxp-backend.c
+    lxp-color.c
     lxp-snapshot.c
     backends/lxqt.c
     backends/openbox.c
@@ -19,4 +21,4 @@ target_include_directories(lxp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_BINARY_DIR})
 
-target_link_libraries(lxp PUBLIC PkgConfig::GLIB PkgConfig::LIBXML2)
+target_link_libraries(lxp PUBLIC PkgConfig::GLIB PkgConfig::LIBXML2 m)

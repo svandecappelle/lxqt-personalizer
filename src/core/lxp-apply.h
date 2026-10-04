@@ -19,6 +19,14 @@ typedef enum {
     LXP_APPLY_SKIP_CHECKS = 1 << 0,
 } LxpApplyFlags;
 
+/*
+ * Capture the current desktop into a new, unsaved theme named <name>.
+ * Backends that fail are skipped; their errors are appended to
+ * <failures> (GError*, may be NULL).
+ */
+LxpTheme *lxp_capture_current(const char *name, const char *const *only,
+                              GPtrArray *failures);
+
 /* Verify that <theme> can be applied. */
 gboolean lxp_check_theme(const LxpTheme *theme, const char *const *only,
                          GError **error);

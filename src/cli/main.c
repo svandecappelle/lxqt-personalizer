@@ -3,6 +3,7 @@
 #include "lxp-apply.h"
 #include "lxp-backend.h"
 #include "lxp-paths.h"
+#include "lxp-preview-render.h"
 #include "lxp-snapshot.h"
 #include "lxp-theme.h"
 
@@ -106,6 +107,7 @@ static int cmd_capture(int argc, char **argv)
         G_OPTION_ENTRY_NULL,
     };
     g_autoptr(LxpTheme) theme = NULL;
+    g_autoptr(GPtrArray) failures = NULL;
     g_autofree char *dir = NULL;
     g_autofree char *manifest = NULL;
     GError *error = NULL;
@@ -131,21 +133,12 @@ static int cmd_capture(int argc, char **argv)
         return 1;
     }
 
-    theme = lxp_theme_new(argv[1]);
+    failures = g_ptr_array_new_with_free_func((GDestroyNotify)g_error_free);
+    theme = lxp_capture_current(argv[1], (const char *const *)only, failures);
     if (author)
         lxp_theme_set_string(theme, LXP_THEME_GROUP, "Author", author);
-
-    for (const LxpBackend *const *b = lxp_backends_get_all(); *b; b++) {
-        if (!(*b)->capture || !lxp_backend_is_available(*b) ||
-            !lxp_backend_selected(*b, (const char *const *)only))
-            continue;
-        if (!(*b)->capture(theme, &error)) {
-            g_printerr("lxp: %s: %s (skipped)\n", (*b)->id, error->message);
-            g_clear_error(&error);
-            continue;
-        }
-        g_print("Captured %s\n", (*b)->id);
-    }
+    for (guint i = 0; i < failures->len; i++)
+        g_printerr("lxp: %s (skipped)\n", ((GError *)failures->pdata[i])->message);
 
     if (!lxp_theme_save(theme, dir, &error))
         return fail(error);
@@ -191,6 +184,51 @@ static int cmd_show(int argc, char **argv)
 
     data = lxp_theme_to_data(theme);
     g_print("# %s\n%s", dir, data);
+    return 0;
+}
+
+static int cmd_preview(int argc, char **argv)
+{
+    g_autofree char *output = NULL;
+    g_autofree char *size = NULL;
+    gboolean current = FALSE;
+    const GOptionEntry entries[] = {
+        { "output", 'o', 0, G_OPTION_ARG_FILENAME, &output,
+          "PNG file to write (default: preview.png)", "FILE" },
+        { "size", 's', 0, G_OPTION_ARG_STRING, &size,
+          "Image size (default: 1440x900)", "WxH" },
+        { "current", 'c', 0, G_OPTION_ARG_NONE, &current,
+          "Preview the current desktop instead of a theme", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
+    g_autoptr(LxpTheme) theme = NULL;
+    g_autoptr(LxpPreviewModel) model = NULL;
+    g_autofree char *dir = NULL;
+    int width = LXP_PREVIEW_WIDTH, height = LXP_PREVIEW_HEIGHT;
+    GError *error = NULL;
+
+    if (!parse_options("preview", "NAME|DIR", entries, &argc, &argv))
+        return 2;
+    if ((current && argc != 1) || (!current && argc != 2) ||
+        (size && (sscanf(size, "%dx%d", &width, &height) != 2 ||
+                  width < 16 || height < 16 || width > 8192 || height > 8192))) {
+        g_printerr("Usage: lxp preview [OPTION…] NAME|DIR\n"
+                   "       lxp preview --current [OPTION…]\n");
+        return 2;
+    }
+
+    if (current) {
+        theme = lxp_capture_current("Current desktop", NULL, NULL);
+    } else if (!(dir = lxp_theme_resolve(argv[1], &error)) ||
+               !(theme = lxp_theme_load(dir, &error))) {
+        return fail(error);
+    }
+
+    model = lxp_preview_model_new(theme);
+    if (!lxp_preview_render_png(model, width, height,
+                                output ? output : "preview.png", &error))
+        return fail(error);
+    g_print("Wrote %s\n", output ? output : "preview.png");
     return 0;
 }
 
@@ -280,10 +318,13 @@ typedef struct {
     GMainLoop *loop;
     int remaining;
     gboolean keep;
+    gboolean porcelain;
 } TryState;
 
 static void try_prompt(TryState *st)
 {
+    if (st->porcelain)
+        return;
     g_print("\rKeep this theme? [y/N] (reverting in %2d s) ", st->remaining);
     fflush(stdout);
 }
@@ -293,7 +334,8 @@ static gboolean try_tick(gpointer data)
     TryState *st = data;
 
     if (--st->remaining <= 0) {
-        g_print("\n");
+        if (!st->porcelain)
+            g_print("\n");
         g_main_loop_quit(st->loop);
         return G_SOURCE_REMOVE;
     }
@@ -316,16 +358,17 @@ static gboolean try_signal(gpointer data)
 {
     TryState *st = data;
 
-    g_print("\n");
+    if (!st->porcelain)
+        g_print("\n");
     g_main_loop_quit(st->loop);
     return G_SOURCE_REMOVE;
 }
 
 /* Ask for confirmation; TRUE when the user keeps the theme in time. */
-static gboolean confirm_try(int seconds)
+static gboolean confirm_try(int seconds, gboolean porcelain)
 {
     g_autoptr(GMainLoop) loop = g_main_loop_new(NULL, FALSE);
-    TryState st = { loop, seconds, FALSE };
+    TryState st = { loop, seconds, FALSE, porcelain };
     guint sources[] = {
         g_timeout_add_seconds(1, try_tick, &st),
         g_unix_fd_add(STDIN_FILENO, G_IO_IN | G_IO_HUP, try_input, &st),
@@ -334,6 +377,8 @@ static gboolean confirm_try(int seconds)
         g_unix_signal_add(SIGHUP, try_signal, &st),
     };
 
+    if (porcelain)
+        g_print("confirm %d\n", seconds);
     try_prompt(&st);
     g_main_loop_run(loop);
     /* Sources that already returned G_SOURCE_REMOVE are gone. */
@@ -349,7 +394,7 @@ static int cmd_apply(int argc, char **argv)
 {
     g_autofree char *only_arg = NULL;
     g_auto(GStrv) only = NULL;
-    gboolean no_reload = FALSE, force = FALSE;
+    gboolean no_reload = FALSE, force = FALSE, porcelain = FALSE;
     int try_seconds = 0;
     const GOptionEntry entries[] = {
         { "only", 0, 0, G_OPTION_ARG_STRING, &only_arg,
@@ -360,6 +405,8 @@ static int cmd_apply(int argc, char **argv)
           "Only write files, do not notify running programs", NULL },
         { "force", 'f', 0, G_OPTION_ARG_NONE, &force,
           "Skip checks for missing themes and files", NULL },
+        { "porcelain", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, &porcelain,
+          "Line-based output for frontends", NULL },
         G_OPTION_ENTRY_NULL,
     };
     g_autofree char *dir = NULL;
@@ -390,8 +437,18 @@ static int cmd_apply(int argc, char **argv)
                                &error);
     if (!snapshot)
         return fail(error);
-    g_print("Applied “%s” (previous configuration saved as snapshot %s)\n",
-            lxp_theme_get_name(theme), snapshot);
+    /*
+     * --porcelain prints one event per line for frontends:
+     *   applied <snapshot>, confirm <seconds>, kept, reverted
+     * Errors and warnings go to stderr.
+     */
+    if (porcelain) {
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        g_print("applied %s\n", snapshot);
+    } else {
+        g_print("Applied “%s” (previous configuration saved as snapshot %s)\n",
+                lxp_theme_get_name(theme), snapshot);
+    }
 
     if (no_reload)
         return 0;
@@ -401,13 +458,13 @@ static int cmd_apply(int argc, char **argv)
     }
 
     if (try_seconds > 0) {
-        if (confirm_try(try_seconds)) {
-            g_print("Keeping “%s”.\n", lxp_theme_get_name(theme));
+        if (confirm_try(try_seconds, porcelain)) {
+            g_print(porcelain ? "kept\n" : "Keeping “%s”.\n", lxp_theme_get_name(theme));
             return 0;
         }
         if (!lxp_rollback(snapshot, TRUE, &error))
             return fail(error);
-        g_print("Reverted to the previous configuration.\n");
+        g_print(porcelain ? "reverted\n" : "Reverted to the previous configuration.\n");
     }
     return 0;
 }
@@ -417,6 +474,7 @@ static const Command commands[] = {
     { "capture",   "NAME",      "Save the current desktop look as a theme",   cmd_capture },
     { "list",      "",          "List installed themes",                      cmd_list },
     { "show",      "NAME|DIR",  "Print a theme manifest",                     cmd_show },
+    { "preview",   "NAME|DIR",  "Render a desktop mockup of a theme to PNG",  cmd_preview },
     { "apply",     "NAME|DIR",  "Apply a theme (--try N to confirm or revert)", cmd_apply },
     { "reload",    "",          "Make running programs reread their config",  cmd_reload },
     { "snapshot",  "[LABEL]",   "Back up the current configuration files",    cmd_snapshot },

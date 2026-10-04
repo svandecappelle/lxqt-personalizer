@@ -15,6 +15,27 @@ static void prefix_error(GError **error, const LxpBackend *backend)
     g_prefix_error(error, "%s: ", backend->id);
 }
 
+LxpTheme *lxp_capture_current(const char *name, const char *const *only,
+                              GPtrArray *failures)
+{
+    LxpTheme *theme = lxp_theme_new(name);
+
+    for (const LxpBackend *const *b = lxp_backends_get_all(); *b; b++) {
+        GError *error = NULL;
+
+        if (!usable(*b, only) || !(*b)->capture)
+            continue;
+        if (!(*b)->capture(theme, &error)) {
+            prefix_error(&error, *b);
+            if (failures)
+                g_ptr_array_add(failures, error);
+            else
+                g_error_free(error);
+        }
+    }
+    return theme;
+}
+
 gboolean lxp_check_theme(const LxpTheme *theme, const char *const *only,
                          GError **error)
 {

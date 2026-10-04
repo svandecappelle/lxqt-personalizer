@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Desktop Themes
+GenericName=Theme Manager
+Comment=Create, preview and apply themes for LXQt and Openbox
+Exec=lxqt-personalizer
+Icon=preferences-desktop-theme
+Terminal=false
+Categories=Settings;DesktopSettings;Qt;GTK;
+Keywords=theme;appearance;openbox;lxqt;wallpaper;cursor;panel;
