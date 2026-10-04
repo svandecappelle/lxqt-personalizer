@@ -1,0 +1,4 @@
+#pragma once
+
+#define LXP_APP_ID      "lxqt-personalizer"
+#define LXP_VERSION     "@PROJECT_VERSION@"
