@@ -37,6 +37,9 @@ GPtrArray       *lxp_snapshot_list(void);
 LxpSnapshotInfo *lxp_snapshot_info_load(const char *id, GError **error);
 void             lxp_snapshot_info_free(LxpSnapshotInfo *info);
 
+/* Number of snapshots kept after each new one. */
+#define LXP_SNAPSHOTS_KEPT 20
+
 /* Delete all but the <keep> most recent snapshots. */
 gboolean         lxp_snapshot_prune(guint keep, GError **error);
 

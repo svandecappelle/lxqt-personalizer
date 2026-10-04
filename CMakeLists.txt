@@ -17,7 +17,7 @@ option(LXP_BUILD_TESTS "Build the test suite" ON)
 
 include(GNUInstallDirs)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0>=2.76)
+pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0>=2.76 gio-2.0>=2.76)
 pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0)
 
 add_compile_options(

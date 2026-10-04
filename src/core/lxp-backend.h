@@ -17,13 +17,26 @@ typedef struct {
     /* User files that apply() may write; snapshotted before applying. */
     GPtrArray *(*managed_files)(void);
 
+    /*
+     * Verify that <theme> can be applied (referenced themes installed,
+     * files present...). Called for every backend before anything is
+     * written.
+     */
+    gboolean   (*check)(const LxpTheme *theme, GError **error);
+
     /* Store the current desktop state into <theme>. */
     gboolean   (*capture)(LxpTheme *theme, GError **error);
 
-    /* Write the configuration described by <theme>. */
+    /*
+     * Write the configuration described by <theme>. Must leave files
+     * untouched when the theme has no data for this backend.
+     */
     gboolean   (*apply)(const LxpTheme *theme, GError **error);
 
-    /* Ask running programs to pick up the new configuration. */
+    /*
+     * Make running programs use the configuration currently on disk.
+     * Must not depend on the theme, so it also works after a rollback.
+     */
     gboolean   (*reload)(GError **error);
 } LxpBackend;
 
@@ -32,5 +45,13 @@ const LxpBackend *const *lxp_backends_get_all(void);
 const LxpBackend        *lxp_backend_find(const char *id);
 gboolean                 lxp_backend_is_available(const LxpBackend *backend);
 
-/* Union of managed_files() of every available backend. */
-GPtrArray               *lxp_backends_managed_files(void);
+/* Fail with a "not installed" error when <path> is NULL; frees <path>. */
+gboolean                 lxp_backend_require(char *path, const char *what,
+                                             const char *name, GError **error);
+
+/* Is <backend> selected by <only> (backend ids; NULL selects all)? */
+gboolean                 lxp_backend_selected(const LxpBackend *backend,
+                                              const char *const *only);
+
+/* Union of managed_files() of the available backends selected by <only>. */
+GPtrArray               *lxp_backends_managed_files(const char *const *only);

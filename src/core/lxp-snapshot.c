@@ -59,6 +59,19 @@ static gboolean snapshot_file(GKeyFile *kf, const char *dir, guint index,
             return FALSE;
         }
         g_key_file_set_boolean(kf, group, "Present", FALSE);
+        {
+            /* Remember directories an apply would create, to remove them. */
+            g_autofree char *top = NULL;
+            g_autofree char *parent = g_path_get_dirname(path);
+
+            while (!g_file_test(parent, G_FILE_TEST_EXISTS)) {
+                g_free(top);
+                top = parent;
+                parent = g_path_get_dirname(top);
+            }
+            if (top)
+                g_key_file_set_string(kf, group, "MissingDir", top);
+        }
         return TRUE;
     }
 
@@ -84,7 +97,7 @@ char *lxp_snapshot_create(const char *label, GPtrArray *files, GError **error)
     g_autofree char *data = NULL;
 
     if (!files)
-        files = owned = lxp_backends_managed_files();
+        files = owned = lxp_backends_managed_files(NULL);
 
     g_key_file_set_string(kf, GROUP, "Label", label ? label : "");
     g_key_file_set_string(kf, GROUP, "Created", created);
@@ -104,6 +117,31 @@ char *lxp_snapshot_create(const char *label, GPtrArray *files, GError **error)
 fail:
     lxp_remove_tree(dir, NULL);
     return NULL;
+}
+
+/*
+ * Remove the now-empty directories between <path> and <top> (inclusive)
+ * that did not exist when the snapshot was taken. Takes <top>.
+ */
+static void remove_created_dirs(const char *path, char *top)
+{
+    g_autofree char *owned_top = top;
+    g_autofree char *dir = NULL;
+
+    if (!top)
+        return;
+    dir = g_path_get_dirname(path);
+    while (g_str_has_prefix(dir, top)) {
+        char *parent;
+
+        if (g_rmdir(dir) != 0)  /* not empty: something else lives there */
+            return;
+        if (g_str_equal(dir, top))
+            return;
+        parent = g_path_get_dirname(dir);
+        g_free(dir);
+        dir = parent;
+    }
 }
 
 static char *latest_id(GError **error)
@@ -165,6 +203,9 @@ gboolean lxp_snapshot_restore(const char *id, GError **error)
             g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(err),
                         "Failed to remove “%s”: %s", path, g_strerror(err));
             return FALSE;
+        } else {
+            remove_created_dirs(path, g_key_file_get_string(kf, group,
+                                                            "MissingDir", NULL));
         }
     }
     return TRUE;

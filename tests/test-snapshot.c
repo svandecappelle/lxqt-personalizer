@@ -5,7 +5,7 @@
 
 #include <glib/gstdio.h>
 
-static char *read_file(const char *path)
+static char *slurp(const char *path)
 {
     char *data = NULL;
     g_file_get_contents(path, &data, NULL, NULL);
@@ -37,7 +37,7 @@ static void test_create_restore(void)
     g_assert_true(lxp_snapshot_restore(NULL, &error));
     g_assert_no_error(error);
 
-    content = read_file(a);
+    content = slurp(a);
     g_assert_cmpstr(content, ==, "original");
     g_assert_cmpint(g_stat(a, &st), ==, 0);
     g_assert_cmpint(st.st_mode & 07777, ==, 0640);
@@ -101,7 +101,7 @@ static void test_restore_errors(void)
     g_assert_false(lxp_snapshot_restore(id, &error));
     g_assert_error(error, LXP_ERROR, LXP_ERROR_INVALID);
     {
-        g_autofree char *content = read_file(a);
+        g_autofree char *content = slurp(a);
         g_assert_cmpstr(content, ==, "changed");
     }
 }

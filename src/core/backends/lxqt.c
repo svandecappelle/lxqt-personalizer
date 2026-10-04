@@ -1,13 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * LXQt appearance: ~/.config/lxqt/lxqt.conf (QSettings INI format).
- * LXQt layers this file over $XDG_CONFIG_DIRS and /usr/share/lxqt.
+ * LXQt layers this file over $XDG_CONFIG_DIRS and /usr/share/lxqt, and
+ * every LXQt/Qt app watches it, so no explicit reload is needed.
  */
 #include "backends.h"
 
+#include "lxp-ini.h"
 #include "lxp-paths.h"
-
-#include <string.h>
+#include "lxp-system.h"
 
 #define LXQT_CONF        "lxqt/lxqt.conf"
 #define GROUP            "LXQt"
@@ -26,41 +27,21 @@ static const struct {
     { "Qt",      "font",                     "font" },
 };
 
-/* QSettings quotes values containing commas: "Sans,11,-1,5,50,0,0,0,0,0" */
-static char *qt_unquote(const char *raw)
-{
-    size_t len = strlen(raw);
-    GString *out;
-
-    if (len < 2 || raw[0] != '"' || raw[len - 1] != '"')
-        return g_strdup(raw);
-
-    out = g_string_sized_new(len);
-    for (size_t i = 1; i < len - 1; i++) {
-        if (raw[i] == '\\' && i + 1 < len - 1)
-            i++;
-        g_string_append_c(out, raw[i]);
-    }
-    return g_string_free(out, FALSE);
-}
-
 /* Layers of lxqt.conf, lowest priority first. */
 static GPtrArray *load_layers(void)
 {
     g_autoptr(GPtrArray) paths = lxp_paths_find_config_layers(LXQT_CONF);
-    GPtrArray *layers = g_ptr_array_new_with_free_func((GDestroyNotify)g_key_file_free);
+    GPtrArray *layers = g_ptr_array_new_with_free_func((GDestroyNotify)lxp_ini_free);
 
     for (guint i = 0; i < paths->len; i++) {
         const char *path = g_ptr_array_index(paths, i);
-        GKeyFile *kf = g_key_file_new();
         g_autoptr(GError) error = NULL;
+        LxpIni *ini = lxp_ini_load(path, FALSE, &error);
 
-        if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, &error)) {
-            g_ptr_array_add(layers, kf);
-        } else {
+        if (ini)
+            g_ptr_array_add(layers, ini);
+        else
             g_warning("Skipping %s: %s", path, error->message);
-            g_key_file_free(kf);
-        }
     }
     return layers;
 }
@@ -81,6 +62,20 @@ static GPtrArray *lxqt_managed_files(void)
     return files;
 }
 
+static gboolean lxqt_check(const LxpTheme *theme, GError **error)
+{
+    g_autofree char *name = lxp_theme_get_string(theme, GROUP, "theme");
+    g_autofree char *icons = lxp_theme_get_string(theme, GROUP, "icon_theme");
+
+    if (name && !lxp_backend_require(lxp_find_installed("lxqt/themes", name, NULL),
+                                     "LXQt theme", name, error))
+        return FALSE;
+    if (icons && !lxp_backend_require(lxp_find_installed("icons", icons, "index.theme"),
+                                      "Icon theme", icons, error))
+        return FALSE;
+    return TRUE;
+}
+
 static gboolean lxqt_capture(LxpTheme *theme, GError **error)
 {
     g_autoptr(GPtrArray) layers = load_layers();
@@ -90,11 +85,10 @@ static gboolean lxqt_capture(LxpTheme *theme, GError **error)
 
     for (gsize k = 0; k < G_N_ELEMENTS(keys); k++) {
         for (guint i = layers->len; i > 0; i--) {
-            GKeyFile *kf = g_ptr_array_index(layers, i - 1);
-            g_autofree char *raw = g_key_file_get_value(kf, keys[k].group,
-                                                        keys[k].key, NULL);
+            const char *raw = lxp_ini_get(g_ptr_array_index(layers, i - 1),
+                                          keys[k].group, keys[k].key);
             if (raw) {
-                g_autofree char *value = qt_unquote(raw);
+                g_autofree char *value = lxp_qt_unquote(raw);
                 lxp_theme_set_string(theme, GROUP, keys[k].theme_key, value);
                 break;
             }
@@ -103,18 +97,66 @@ static gboolean lxqt_capture(LxpTheme *theme, GError **error)
 
     /* A custom palette is all-or-nothing: take the highest layer that has one. */
     for (guint i = layers->len; i > 0; i--) {
-        GKeyFile *kf = g_ptr_array_index(layers, i - 1);
-        g_auto(GStrv) names = g_key_file_get_keys(kf, "Palette", NULL, NULL);
+        LxpIni *ini = g_ptr_array_index(layers, i - 1);
+        g_auto(GStrv) names = lxp_ini_get_keys(ini, "Palette");
 
-        if (!names)
+        if (!names[0])
             continue;
-        for (char **n = names; *n; n++) {
-            g_autofree char *value = g_key_file_get_value(kf, "Palette", *n, NULL);
-            lxp_theme_set_string(theme, GROUP_PALETTE, *n, value);
-        }
+        for (char **n = names; *n; n++)
+            lxp_theme_set_string(theme, GROUP_PALETTE, *n,
+                                 lxp_ini_get(ini, "Palette", *n));
         break;
     }
     return TRUE;
+}
+
+static gboolean lxqt_apply(const LxpTheme *theme, GError **error)
+{
+    GKeyFile *kf = lxp_theme_get_keyfile(theme);
+    g_autofree char *path = lxp_paths_user_config(LXQT_CONF);
+    g_autoptr(LxpIni) ini = NULL;
+    g_auto(GStrv) palette = NULL;
+    g_autofree char *stamp = NULL;
+
+    if (!g_key_file_has_group(kf, GROUP))
+        return TRUE;
+    if (!(ini = lxp_ini_load(path, TRUE, error)))
+        return FALSE;
+
+    for (gsize k = 0; k < G_N_ELEMENTS(keys); k++) {
+        g_autofree char *value = lxp_theme_get_string(theme, GROUP, keys[k].theme_key);
+        g_autofree char *quoted = NULL;
+
+        if (!value)
+            continue;
+        quoted = lxp_qt_quote(value);
+        lxp_ini_set(ini, keys[k].group, keys[k].key, quoted);
+    }
+
+    /*
+     * The palette is replaced as a whole, in place. No palette in the
+     * theme means "use the LXQt theme's own colors".
+     */
+    palette = g_key_file_get_keys(kf, GROUP_PALETTE, NULL, NULL);
+    if (!palette) {
+        lxp_ini_remove_group(ini, "Palette");
+    } else {
+        g_auto(GStrv) current = lxp_ini_get_keys(ini, "Palette");
+
+        for (char **n = current; *n; n++)
+            if (!g_strv_contains((const char *const *)palette, *n))
+                lxp_ini_remove(ini, "Palette", *n);
+        for (char **n = palette; *n; n++) {
+            g_autofree char *value = lxp_theme_get_string(theme, GROUP_PALETTE, *n);
+            lxp_ini_set(ini, "Palette", *n, value);
+        }
+    }
+
+    /* Tells running LXQt components to reload the theme files too. */
+    stamp = g_strdup_printf("%" G_GINT64_FORMAT, g_get_real_time() / 1000);
+    lxp_ini_set(ini, "General", "__theme_updated__", stamp);
+
+    return lxp_ini_save(ini, path, error);
 }
 
 const LxpBackend lxp_backend_lxqt = {
@@ -122,5 +164,7 @@ const LxpBackend lxp_backend_lxqt = {
     .description = "LXQt theme, icons, Qt style, palette and font",
     .available = lxqt_available,
     .managed_files = lxqt_managed_files,
+    .check = lxqt_check,
     .capture = lxqt_capture,
+    .apply = lxqt_apply,
 };

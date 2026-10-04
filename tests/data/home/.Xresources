@@ -1,0 +1,4 @@
+! cursor
+Xcursor.theme: Qogir-dark
+Xcursor.size: 18
+URxvt.font: xft:Mono:size=10

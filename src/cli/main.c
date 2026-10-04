@@ -1,14 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "config.h"
+#include "lxp-apply.h"
 #include "lxp-backend.h"
 #include "lxp-paths.h"
 #include "lxp-snapshot.h"
 #include "lxp-theme.h"
 
+#include <glib-unix.h>
 #include <locale.h>
 #include <stdio.h>
+#include <unistd.h>
 
-#define SNAPSHOTS_KEPT 20
 
 typedef int (*CommandFunc)(int argc, char **argv);
 
@@ -44,6 +46,27 @@ static gboolean parse_options(const char *name, const char *args,
     return TRUE;
 }
 
+/* "lxqt,openbox" -> {"lxqt", "openbox"}; validates the ids. */
+static gboolean parse_only(const char *value, GStrv *out)
+{
+    g_auto(GStrv) ids = NULL;
+
+    *out = NULL;
+    if (!value)
+        return TRUE;
+
+    ids = g_strsplit(value, ",", -1);
+    for (char **id = ids; *id; id++) {
+        g_strstrip(*id);
+        if (!lxp_backend_find(*id)) {
+            g_printerr("lxp: unknown backend “%s” (see “lxp backends”)\n", *id);
+            return FALSE;
+        }
+    }
+    *out = g_steal_pointer(&ids);
+    return TRUE;
+}
+
 static int cmd_backends(int argc, char **argv)
 {
     if (!parse_options("backends", "", NULL, &argc, &argv))
@@ -68,10 +91,14 @@ static int cmd_capture(int argc, char **argv)
 {
     g_autofree char *output = NULL;
     g_autofree char *author = NULL;
+    g_autofree char *only_arg = NULL;
+    g_auto(GStrv) only = NULL;
     gboolean force = FALSE;
     const GOptionEntry entries[] = {
         { "output", 'o', 0, G_OPTION_ARG_FILENAME, &output,
           "Write the theme to DIR instead of the themes directory", "DIR" },
+        { "only", 0, 0, G_OPTION_ARG_STRING, &only_arg,
+          "Capture only these backends", "ID,…" },
         { "author", 'a', 0, G_OPTION_ARG_STRING, &author,
           "Theme author", "NAME" },
         { "force", 'f', 0, G_OPTION_ARG_NONE, &force,
@@ -83,7 +110,8 @@ static int cmd_capture(int argc, char **argv)
     g_autofree char *manifest = NULL;
     GError *error = NULL;
 
-    if (!parse_options("capture", "NAME", entries, &argc, &argv))
+    if (!parse_options("capture", "NAME", entries, &argc, &argv) ||
+        !parse_only(only_arg, &only))
         return 2;
     if (argc != 2) {
         g_printerr("Usage: lxp capture [OPTION…] NAME\n");
@@ -108,7 +136,8 @@ static int cmd_capture(int argc, char **argv)
         lxp_theme_set_string(theme, LXP_THEME_GROUP, "Author", author);
 
     for (const LxpBackend *const *b = lxp_backends_get_all(); *b; b++) {
-        if (!(*b)->capture || !lxp_backend_is_available(*b))
+        if (!(*b)->capture || !lxp_backend_is_available(*b) ||
+            !lxp_backend_selected(*b, (const char *const *)only))
             continue;
         if (!(*b)->capture(theme, &error)) {
             g_printerr("lxp: %s: %s (skipped)\n", (*b)->id, error->message);
@@ -175,7 +204,7 @@ static int cmd_snapshot(int argc, char **argv)
 
     if (!(id = lxp_snapshot_create(argc > 1 ? argv[1] : "manual", NULL, &error)))
         return fail(error);
-    if (!lxp_snapshot_prune(SNAPSHOTS_KEPT, &error))
+    if (!lxp_snapshot_prune(LXP_SNAPSHOTS_KEPT, &error))
         return fail(error);
     g_print("Created snapshot %s\n", id);
     return 0;
@@ -203,17 +232,183 @@ static int cmd_snapshots(int argc, char **argv)
 
 static int cmd_rollback(int argc, char **argv)
 {
+    gboolean no_reload = FALSE;
+    const GOptionEntry entries[] = {
+        { "no-reload", 0, 0, G_OPTION_ARG_NONE, &no_reload,
+          "Only restore files, do not notify running programs", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
     const char *id;
     GError *error = NULL;
 
-    if (!parse_options("rollback", "[ID]", NULL, &argc, &argv))
+    if (!parse_options("rollback", "[ID]", entries, &argc, &argv))
         return 2;
     id = argc > 1 ? argv[1] : NULL;
 
     if (!lxp_snapshot_restore(id, &error))
         return fail(error);
     g_print("Restored snapshot %s\n", id ? id : "(latest)");
-    g_print("Log out and back in, or reload the affected programs, to see the change.\n");
+    if (!no_reload && !lxp_reload(NULL, &error)) {
+        g_printerr("lxp: warning: %s\n", error->message);
+        g_clear_error(&error);
+    }
+    return 0;
+}
+
+static int cmd_reload(int argc, char **argv)
+{
+    g_autofree char *only_arg = NULL;
+    g_auto(GStrv) only = NULL;
+    const GOptionEntry entries[] = {
+        { "only", 0, 0, G_OPTION_ARG_STRING, &only_arg,
+          "Reload only these backends", "ID,…" },
+        G_OPTION_ENTRY_NULL,
+    };
+    GError *error = NULL;
+
+    if (!parse_options("reload", "", entries, &argc, &argv) ||
+        !parse_only(only_arg, &only))
+        return 2;
+    if (!lxp_reload((const char *const *)only, &error))
+        return fail(error);
+    return 0;
+}
+
+/* --- apply --try ------------------------------------------------------- */
+
+typedef struct {
+    GMainLoop *loop;
+    int remaining;
+    gboolean keep;
+} TryState;
+
+static void try_prompt(TryState *st)
+{
+    g_print("\rKeep this theme? [y/N] (reverting in %2d s) ", st->remaining);
+    fflush(stdout);
+}
+
+static gboolean try_tick(gpointer data)
+{
+    TryState *st = data;
+
+    if (--st->remaining <= 0) {
+        g_print("\n");
+        g_main_loop_quit(st->loop);
+        return G_SOURCE_REMOVE;
+    }
+    try_prompt(st);
+    return G_SOURCE_CONTINUE;
+}
+
+static gboolean try_input(int fd, GIOCondition cond, gpointer data)
+{
+    TryState *st = data;
+    char buf[64] = { 0 };
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+
+    st->keep = n > 0 && g_ascii_tolower(g_strstrip(buf)[0]) == 'y';
+    g_main_loop_quit(st->loop);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean try_signal(gpointer data)
+{
+    TryState *st = data;
+
+    g_print("\n");
+    g_main_loop_quit(st->loop);
+    return G_SOURCE_REMOVE;
+}
+
+/* Ask for confirmation; TRUE when the user keeps the theme in time. */
+static gboolean confirm_try(int seconds)
+{
+    g_autoptr(GMainLoop) loop = g_main_loop_new(NULL, FALSE);
+    TryState st = { loop, seconds, FALSE };
+    guint sources[] = {
+        g_timeout_add_seconds(1, try_tick, &st),
+        g_unix_fd_add(STDIN_FILENO, G_IO_IN | G_IO_HUP, try_input, &st),
+        g_unix_signal_add(SIGINT, try_signal, &st),
+        g_unix_signal_add(SIGTERM, try_signal, &st),
+        g_unix_signal_add(SIGHUP, try_signal, &st),
+    };
+
+    try_prompt(&st);
+    g_main_loop_run(loop);
+    /* Sources that already returned G_SOURCE_REMOVE are gone. */
+    for (gsize i = 0; i < G_N_ELEMENTS(sources); i++) {
+        GSource *source = g_main_context_find_source_by_id(NULL, sources[i]);
+        if (source)
+            g_source_destroy(source);
+    }
+    return st.keep;
+}
+
+static int cmd_apply(int argc, char **argv)
+{
+    g_autofree char *only_arg = NULL;
+    g_auto(GStrv) only = NULL;
+    gboolean no_reload = FALSE, force = FALSE;
+    int try_seconds = 0;
+    const GOptionEntry entries[] = {
+        { "only", 0, 0, G_OPTION_ARG_STRING, &only_arg,
+          "Apply only these backends", "ID,…" },
+        { "try", 't', 0, G_OPTION_ARG_INT, &try_seconds,
+          "Revert unless confirmed within SECONDS", "SECONDS" },
+        { "no-reload", 0, 0, G_OPTION_ARG_NONE, &no_reload,
+          "Only write files, do not notify running programs", NULL },
+        { "force", 'f', 0, G_OPTION_ARG_NONE, &force,
+          "Skip checks for missing themes and files", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
+    g_autofree char *dir = NULL;
+    g_autofree char *snapshot = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    const char *const *selected;
+    GError *error = NULL;
+
+    if (!parse_options("apply", "NAME|DIR", entries, &argc, &argv) ||
+        !parse_only(only_arg, &only))
+        return 2;
+    if (argc != 2 || try_seconds < 0) {
+        g_printerr("Usage: lxp apply [OPTION…] NAME|DIR\n");
+        return 2;
+    }
+    if (try_seconds > 0 && no_reload) {
+        g_printerr("lxp: --try needs reloading; drop --no-reload\n");
+        return 2;
+    }
+    selected = (const char *const *)only;
+
+    if (!(dir = lxp_theme_resolve(argv[1], &error)) ||
+        !(theme = lxp_theme_load(dir, &error)))
+        return fail(error);
+
+    snapshot = lxp_apply_theme(theme, selected,
+                               force ? LXP_APPLY_SKIP_CHECKS : LXP_APPLY_DEFAULT,
+                               &error);
+    if (!snapshot)
+        return fail(error);
+    g_print("Applied “%s” (previous configuration saved as snapshot %s)\n",
+            lxp_theme_get_name(theme), snapshot);
+
+    if (no_reload)
+        return 0;
+    if (!lxp_reload(selected, &error)) {
+        g_printerr("lxp: warning: %s\n", error->message);
+        g_clear_error(&error);
+    }
+
+    if (try_seconds > 0) {
+        if (confirm_try(try_seconds)) {
+            g_print("Keeping “%s”.\n", lxp_theme_get_name(theme));
+            return 0;
+        }
+        if (!lxp_rollback(snapshot, TRUE, &error))
+            return fail(error);
+        g_print("Reverted to the previous configuration.\n");
+    }
     return 0;
 }
 
@@ -222,6 +417,8 @@ static const Command commands[] = {
     { "capture",   "NAME",      "Save the current desktop look as a theme",   cmd_capture },
     { "list",      "",          "List installed themes",                      cmd_list },
     { "show",      "NAME|DIR",  "Print a theme manifest",                     cmd_show },
+    { "apply",     "NAME|DIR",  "Apply a theme (--try N to confirm or revert)", cmd_apply },
+    { "reload",    "",          "Make running programs reread their config",  cmd_reload },
     { "snapshot",  "[LABEL]",   "Back up the current configuration files",    cmd_snapshot },
     { "snapshots", "",          "List configuration snapshots",               cmd_snapshots },
     { "rollback",  "[ID]",      "Restore a snapshot (default: the latest)",   cmd_rollback },
