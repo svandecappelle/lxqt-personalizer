@@ -14,6 +14,7 @@ covering:
 | `wallpaper` | wallpaper file and mode                    | `~/.config/pcmanfm-qt/<profile>/settings.conf`                |
 | `panel`     | position, size, colors, opacity            | `~/.config/lxqt/panel.conf`                                   |
 | `compositor`| rounded corners, shadows, fading (picom)   | `~/.config/picom.conf`                                        |
+| `kvantum`   | Kvantum theme (with the kvantum style)     | `~/.config/Kvantum/kvantum.kvconfig`                          |
 
 Files are edited in place: only themed keys change, everything else
 (comments, layout, unrelated settings) is kept byte for byte.
@@ -84,14 +85,24 @@ keep it; **Apply** applies it; the header bar creates a new theme, saves
 the current desktop as a theme and undoes the last change.
 
 **Import Theme…** (Ctrl+O, in the menu) and **Export…** share themes as
-packs. **New Theme** (Ctrl+N) and **Edit Colors…** open the editor, with a
+packs (the menu also exports without bundled themes). **Apply Parts…**
+applies or tries only some parts of a theme, **History** lists the backups
+to restore, and the details warn about anything a theme needs that is
+missing. **New Theme** (Ctrl+N) and **Edit Colors…** open the editor, with a
 live preview:
 
-- **Colors** — presets, the scheme colors, contrast warnings;
-- **Appearance** — window (Openbox) theme and title buttons, GTK theme,
-  LXQt theme, Qt widget style, icons, font, cursor theme and size;
-- **Desktop** — wallpaper, panel position, size and opacity;
-- **Effects** — corner radius, shadows, shadow strength, fading (picom).
+- **Colors** — name, author, description, presets, the scheme colors
+  (optional text-on-accent, title bar, panel and link colors), contrast
+  warnings;
+- **Appearance** — window (Openbox) theme, title buttons, title font,
+  border when maximized, minimize animation; GTK and LXQt themes, Qt widget
+  style and Kvantum theme, icons, font, toolbar button style, icons
+  following the colors; GTK icons, font and light/dark variant; cursor
+  theme and size;
+- **Desktop** — wallpaper; panel position, size, opacity, icon size, rows,
+  length, alignment, auto-hide and reserved space;
+- **Effects** — corner radius, shadows (strength, blur, offsets), inactive
+  window opacity, fading (picom).
 
 The window, GTK and LXQt themes are either *Generated from colors* or an
 installed theme; the choice is stored as `generate=` in `[Scheme]`, so

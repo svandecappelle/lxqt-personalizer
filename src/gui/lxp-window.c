@@ -2,6 +2,7 @@
 #include "lxp-window.h"
 
 #include "lxp-apply.h"
+#include "lxp-backend.h"
 #include "lxp-editor.h"
 #include "lxp-fileutil.h"
 #include "lxp-pack.h"
@@ -9,6 +10,7 @@
 #include "lxp-paths.h"
 #include "lxp-preview-area.h"
 #include "lxp-runner.h"
+#include "lxp-snapshot.h"
 
 #include <stdlib.h>
 
@@ -34,6 +36,9 @@ struct _LxpWindow {
     GtkWidget *delete_button;
     GtkWidget *edit_button;
     GtkWidget *export_button;
+    GtkWidget *parts_button;
+    GtkWidget *missing;
+    LxpPackFlags export_flags;
     GtkWidget *save_button;
     GtkWidget *spinner;
     GtkWidget *banner;
@@ -209,7 +214,22 @@ static void update_details(LxpWindow *win)
         row++;
     }
 
+    if (e->dir) {
+        g_autoptr(GPtrArray) problems = lxp_check_theme_all(e->theme, NULL);
+        g_autoptr(GString) text = g_string_new(NULL);
+
+        for (guint i = 0; i < problems->len; i++)
+            g_string_append_printf(text, "%s⚠ %s", i ? "\n" : "",
+                                   ((GError *)problems->pdata[i])->message);
+        gtk_label_set_text(GTK_LABEL(win->missing), text->str);
+        gtk_widget_set_visible(win->missing, problems->len > 0);
+    } else {
+        gtk_widget_set_visible(win->missing, FALSE);
+    }
+
     gtk_widget_set_visible(win->apply_button, e->dir != NULL);
+    gtk_widget_set_visible(win->parts_button, e->dir != NULL);
+    gtk_widget_set_sensitive(win->parts_button, idle);
     gtk_widget_set_visible(win->try_button, e->dir != NULL);
     gtk_widget_set_visible(win->delete_button, e->dir != NULL);
     gtk_widget_set_visible(win->edit_button, e->dir != NULL);
@@ -304,6 +324,7 @@ static void set_busy(LxpWindow *win, gboolean busy)
     gtk_widget_set_visible(win->spinner, busy);
     gtk_spinner_set_spinning(GTK_SPINNER(win->spinner), busy);
     gtk_widget_action_set_enabled(GTK_WIDGET(win), "win.undo", !busy);
+    gtk_widget_action_set_enabled(GTK_WIDGET(win), "win.history", !busy);
     gtk_widget_action_set_enabled(GTK_WIDGET(win), "win.reload-desktop", !busy);
     update_details(win);
 }
@@ -462,22 +483,111 @@ static void run_lxp(LxpWindow *win, const char *const *args, const char *theme_n
     set_busy(win, TRUE);
 }
 
-static void start_apply(LxpWindow *win, gboolean try_mode)
+/* Apply (or try) the selected theme; <only> limits it to these backends. */
+static void start_apply_only(LxpWindow *win, gboolean try_mode, const char *only)
 {
     g_autofree char *seconds = g_strdup_printf("%d", TRY_SECONDS);
+    g_autoptr(GStrvBuilder) builder = g_strv_builder_new();
+    g_auto(GStrv) args = NULL;
 
     if (!win->selected || !win->selected->dir)
         return;
-    {
-        /* Without --try, the NULL ends the list before <seconds>. */
-        const char *args[] = { "apply", win->selected->dir, "--porcelain",
-                               try_mode ? "--try" : NULL, seconds, NULL };
-        run_lxp(win, args, lxp_theme_get_name(win->selected->theme), try_mode);
-    }
+    g_strv_builder_add_many(builder, "apply", win->selected->dir, "--porcelain", NULL);
+    if (try_mode)
+        g_strv_builder_add_many(builder, "--try", seconds, NULL);
+    if (only)
+        g_strv_builder_add_many(builder, "--only", only, NULL);
+    args = g_strv_builder_end(builder);
+    run_lxp(win, (const char *const *)args, lxp_theme_get_name(win->selected->theme), try_mode);
+}
+
+static void start_apply(LxpWindow *win, gboolean try_mode)
+{
+    start_apply_only(win, try_mode, NULL);
 }
 
 static void on_apply(GtkButton *b, gpointer user) { start_apply(user, FALSE); }
 static void on_try(GtkButton *b, gpointer user)   { start_apply(user, TRUE); }
+
+static void parts_run(GtkWidget *button, gboolean try_mode)
+{
+    GtkWidget *dialog = GTK_WIDGET(gtk_widget_get_root(button));
+    LxpWindow *win = g_object_get_data(G_OBJECT(dialog), "lxp-window");
+    GtkWidget *list = g_object_get_data(G_OBJECT(dialog), "lxp-parts");
+    g_autoptr(GString) only = g_string_new(NULL);
+
+    for (GtkWidget *c = gtk_widget_get_first_child(list); c; c = gtk_widget_get_next_sibling(c)) {
+        if (!gtk_check_button_get_active(GTK_CHECK_BUTTON(c)))
+            continue;
+        if (only->len)
+            g_string_append_c(only, ',');
+        g_string_append(only, g_object_get_data(G_OBJECT(c), "lxp-backend"));
+    }
+    gtk_window_destroy(GTK_WINDOW(dialog));
+    if (only->len)
+        start_apply_only(win, try_mode, only->str);
+}
+
+static void on_parts_try(GtkButton *b, gpointer user)   { parts_run(GTK_WIDGET(b), TRUE); }
+static void on_parts_apply(GtkButton *b, gpointer user) { parts_run(GTK_WIDGET(b), FALSE); }
+
+static void on_parts(GtkButton *button, gpointer user)
+{
+    LxpWindow *win = user;
+    GtkWidget *dialog = gtk_window_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *intro = gtk_label_new("Choose which parts of the theme to apply. The other "
+                                     "parts of your desktop stay as they are.");
+    GtkWidget *list = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *cancel = gtk_button_new_with_mnemonic("_Cancel");
+    GtkWidget *try_button = gtk_button_new_with_mnemonic("_Try");
+    GtkWidget *apply = gtk_button_new_with_mnemonic("_Apply");
+
+    if (!win->selected || !win->selected->dir)
+        return;
+    for (const LxpBackend *const *b = lxp_backends_get_all(); *b; b++) {
+        GtkWidget *check;
+
+        if (!lxp_backend_is_available(*b) || !(*b)->apply)
+            continue;
+        check = gtk_check_button_new_with_label((*b)->description);
+        gtk_check_button_set_active(GTK_CHECK_BUTTON(check), TRUE);
+        g_object_set_data(G_OBJECT(check), "lxp-backend", (gpointer)(*b)->id);
+        gtk_box_append(GTK_BOX(list), check);
+    }
+
+    gtk_window_set_title(GTK_WINDOW(dialog), "Apply Parts");
+    gtk_window_set_application(GTK_WINDOW(dialog), gtk_window_get_application(GTK_WINDOW(win)));
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(win));
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
+    g_object_set_data(G_OBJECT(dialog), "lxp-window", win);
+    g_object_set_data(G_OBJECT(dialog), "lxp-parts", list);
+
+    gtk_label_set_wrap(GTK_LABEL(intro), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(intro), 44);
+    gtk_label_set_xalign(GTK_LABEL(intro), 0);
+    g_signal_connect_swapped(cancel, "clicked", G_CALLBACK(gtk_window_destroy), dialog);
+    g_signal_connect(try_button, "clicked", G_CALLBACK(on_parts_try), NULL);
+    gtk_widget_add_css_class(apply, "suggested-action");
+    g_signal_connect(apply, "clicked", G_CALLBACK(on_parts_apply), NULL);
+    gtk_widget_set_halign(buttons, GTK_ALIGN_END);
+    gtk_box_append(GTK_BOX(buttons), cancel);
+    gtk_box_append(GTK_BOX(buttons), try_button);
+    gtk_box_append(GTK_BOX(buttons), apply);
+
+    gtk_widget_set_margin_top(box, 18);
+    gtk_widget_set_margin_bottom(box, 18);
+    gtk_widget_set_margin_start(box, 18);
+    gtk_widget_set_margin_end(box, 18);
+    gtk_box_append(GTK_BOX(box), intro);
+    gtk_box_append(GTK_BOX(box), list);
+    gtk_box_append(GTK_BOX(box), buttons);
+    gtk_window_set_child(GTK_WINDOW(dialog), box);
+    gtk_window_present(GTK_WINDOW(dialog));
+}
 
 static void undo_activated(GtkWidget *widget, const char *action, GVariant *param)
 {
@@ -497,6 +607,92 @@ static void refresh_activated(GtkWidget *widget, const char *action, GVariant *p
     g_autofree char *select = win->selected ? g_strdup(win->selected->dir) : NULL;
 
     reload_gallery(win, select);
+}
+
+/* --- history ------------------------------------------------------------ */
+
+static void on_restore(GtkButton *button, gpointer user)
+{
+    LxpWindow *win = user;
+    const char *id = g_object_get_data(G_OBJECT(button), "lxp-snapshot");
+    const char *args[] = { "rollback", id, NULL };
+
+    gtk_window_destroy(GTK_WINDOW(gtk_widget_get_root(GTK_WIDGET(button))));
+    run_lxp(win, args, NULL, FALSE);
+}
+
+static void history_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    LxpWindow *win = LXP_WINDOW(widget);
+    g_autoptr(GPtrArray) snapshots = lxp_snapshot_list();
+    GtkWidget *dialog = gtk_window_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *intro = gtk_label_new("Your configuration files are backed up every time a "
+                                     "theme is applied. Restoring one brings back the files "
+                                     "as they were before that change.");
+    GtkWidget *scroller = gtk_scrolled_window_new();
+    GtkWidget *list = gtk_list_box_new();
+
+    gtk_window_set_title(GTK_WINDOW(dialog), "History");
+    gtk_window_set_application(GTK_WINDOW(dialog), gtk_window_get_application(GTK_WINDOW(win)));
+    gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(win));
+    gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_destroy_with_parent(GTK_WINDOW(dialog), TRUE);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 560, 460);
+
+    gtk_label_set_wrap(GTK_LABEL(intro), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(intro), 0);
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
+    gtk_widget_add_css_class(list, "boxed-list");
+
+    for (guint i = 0; i < snapshots->len; i++) {
+        LxpSnapshotInfo *info = g_ptr_array_index(snapshots, i);
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+        GtkWidget *text = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        g_autofree char *when = info->created
+            ? g_date_time_format(info->created, "%A %-d %B %Y, %H:%M:%S")
+            : g_strdup(info->id);
+        g_autofree char *detail = g_strdup_printf("%s · %u files",
+            info->label && *info->label ? info->label : "manual backup", info->n_files);
+        GtkWidget *title = gtk_label_new(when);
+        GtkWidget *sub = gtk_label_new(detail);
+        GtkWidget *restore = gtk_button_new_with_label("Restore");
+
+        gtk_label_set_xalign(GTK_LABEL(title), 0);
+        gtk_label_set_xalign(GTK_LABEL(sub), 0);
+        gtk_label_set_ellipsize(GTK_LABEL(sub), PANGO_ELLIPSIZE_END);
+        gtk_widget_add_css_class(sub, "dim-label");
+        gtk_widget_set_hexpand(text, TRUE);
+        gtk_box_append(GTK_BOX(text), title);
+        gtk_box_append(GTK_BOX(text), sub);
+        gtk_widget_set_valign(restore, GTK_ALIGN_CENTER);
+        gtk_widget_set_sensitive(restore, win->runner == NULL);
+        g_object_set_data_full(G_OBJECT(restore), "lxp-snapshot", g_strdup(info->id), g_free);
+        g_signal_connect(restore, "clicked", G_CALLBACK(on_restore), win);
+        gtk_box_append(GTK_BOX(row), text);
+        gtk_box_append(GTK_BOX(row), restore);
+        gtk_widget_set_margin_top(row, 6);
+        gtk_widget_set_margin_bottom(row, 6);
+        gtk_widget_set_margin_start(row, 12);
+        gtk_widget_set_margin_end(row, 12);
+        gtk_list_box_append(GTK_LIST_BOX(list), row);
+    }
+    if (snapshots->len == 0)
+        gtk_list_box_set_placeholder(GTK_LIST_BOX(list),
+                                     gtk_label_new("No backups yet."));
+
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), list);
+    gtk_widget_set_vexpand(scroller, TRUE);
+    gtk_widget_set_margin_top(box, 18);
+    gtk_widget_set_margin_bottom(box, 18);
+    gtk_widget_set_margin_start(box, 18);
+    gtk_widget_set_margin_end(box, 18);
+    gtk_box_append(GTK_BOX(box), intro);
+    gtk_box_append(GTK_BOX(box), scroller);
+    gtk_window_set_child(GTK_WINDOW(dialog), box);
+    gtk_window_present(GTK_WINDOW(dialog));
 }
 
 /* --- save current desktop ------------------------------------------------ */
@@ -679,7 +875,7 @@ static void export_chosen(GObject *source, GAsyncResult *res, gpointer user)
         if (!lxp_preview_render_png(model, 960, 600, preview, NULL))
             g_clear_pointer(&preview, g_free);
     }
-    ok = lxp_pack_export(win->selected->theme, path, preview, LXP_PACK_DEFAULT, notes, &error);
+    ok = lxp_pack_export(win->selected->theme, path, preview, win->export_flags, notes, &error);
     if (tmp)
         lxp_remove_tree(tmp, NULL);
 
@@ -692,9 +888,8 @@ static void export_chosen(GObject *source, GAsyncResult *res, gpointer user)
     }
 }
 
-static void on_export(GtkButton *button, gpointer user)
+static void export_theme(LxpWindow *win, LxpPackFlags flags)
 {
-    LxpWindow *win = user;
     g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
     g_autoptr(GListModel) filters = pack_filters();
     g_autofree char *slug = NULL;
@@ -707,7 +902,18 @@ static void on_export(GtkButton *button, gpointer user)
     gtk_file_dialog_set_title(dialog, "Export Theme");
     gtk_file_dialog_set_filters(dialog, filters);
     gtk_file_dialog_set_initial_name(dialog, name);
+    win->export_flags = flags;
     gtk_file_dialog_save(dialog, GTK_WINDOW(win), NULL, export_chosen, win);
+}
+
+static void on_export(GtkButton *button, gpointer user)
+{
+    export_theme(user, LXP_PACK_DEFAULT);
+}
+
+static void export_plain_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    export_theme(LXP_WINDOW(widget), LXP_PACK_NO_BUNDLE);
 }
 
 /* --- delete ------------------------------------------------------------- */
@@ -755,6 +961,7 @@ static GtkWidget *build_header(LxpWindow *win)
     GtkWidget *create = gtk_button_new_from_icon_name("list-add-symbolic");
     GtkWidget *save = gtk_button_new_from_icon_name("document-save-as-symbolic");
     GtkWidget *undo = gtk_button_new_from_icon_name("edit-undo-symbolic");
+    GtkWidget *history = gtk_button_new_from_icon_name("document-open-recent-symbolic");
     GtkWidget *menu_button = gtk_menu_button_new();
     g_autoptr(GMenu) menu = g_menu_new();
 
@@ -764,8 +971,11 @@ static GtkWidget *build_header(LxpWindow *win)
     gtk_actionable_set_action_name(GTK_ACTIONABLE(save), "win.save-current");
     gtk_widget_set_tooltip_text(undo, "Undo the last change to the desktop");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(undo), "win.undo");
+    gtk_widget_set_tooltip_text(history, "Backups of your configuration, to restore");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(history), "win.history");
 
     g_menu_append(menu, "_Import Theme…", "win.import");
+    g_menu_append(menu, "Export _Without Bundled Themes…", "win.export-plain");
     g_menu_append(menu, "_Refresh Themes", "win.refresh");
     g_menu_append(menu, "Re_load Desktop", "win.reload-desktop");
     g_menu_append(menu, "_About", "app.about");
@@ -778,6 +988,7 @@ static GtkWidget *build_header(LxpWindow *win)
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), create);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), save);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), undo);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), history);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), menu_button);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), win->spinner);
     return header;
@@ -827,6 +1038,12 @@ static GtkWidget *build_details(LxpWindow *win)
     gtk_widget_set_tooltip_text(win->swatches, "Window, base, text, highlight, link, "
                                                "title bar and panel colors");
 
+    win->missing = gtk_label_new(NULL);
+    gtk_label_set_xalign(GTK_LABEL(win->missing), 0);
+    gtk_label_set_wrap(GTK_LABEL(win->missing), TRUE);
+    gtk_widget_add_css_class(win->missing, "warning");
+    gtk_widget_set_visible(win->missing, FALSE);
+
     win->details = gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(win->details), 4);
     gtk_grid_set_column_spacing(GTK_GRID(win->details), 12);
@@ -841,6 +1058,9 @@ static GtkWidget *build_details(LxpWindow *win)
     g_signal_connect(win->export_button, "clicked", G_CALLBACK(on_export), win);
     win->save_button = gtk_button_new_with_mnemonic("_Save as Theme…");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(win->save_button), "win.save-current");
+    win->parts_button = gtk_button_new_with_mnemonic("Apply _Parts…");
+    gtk_widget_set_tooltip_text(win->parts_button, "Apply or try only some parts of the theme");
+    g_signal_connect(win->parts_button, "clicked", G_CALLBACK(on_parts), win);
     win->try_button = gtk_button_new_with_mnemonic("_Try");
     gtk_widget_set_tooltip_text(win->try_button, "Apply now and revert automatically "
                                                  "unless confirmed");
@@ -855,6 +1075,7 @@ static GtkWidget *build_details(LxpWindow *win)
     gtk_box_append(GTK_BOX(actions), win->export_button);
     gtk_box_append(GTK_BOX(actions), win->edit_button);
     gtk_box_append(GTK_BOX(actions), win->save_button);
+    gtk_box_append(GTK_BOX(actions), win->parts_button);
     gtk_box_append(GTK_BOX(actions), win->try_button);
     gtk_box_append(GTK_BOX(actions), win->apply_button);
 
@@ -867,6 +1088,7 @@ static GtkWidget *build_details(LxpWindow *win)
     gtk_box_append(GTK_BOX(box), win->subtitle);
     gtk_box_append(GTK_BOX(box), win->swatches);
     gtk_box_append(GTK_BOX(box), win->details);
+    gtk_box_append(GTK_BOX(box), win->missing);
     gtk_box_append(GTK_BOX(box), actions);
     return box;
 }
@@ -912,6 +1134,9 @@ static void lxp_window_class_init(LxpWindowClass *klass)
     gtk_widget_class_install_action(widget_class, "win.new-theme", NULL, new_theme_activated);
     gtk_widget_class_install_action(widget_class, "win.import", NULL, import_activated);
     gtk_widget_class_install_action(widget_class, "win.undo", NULL, undo_activated);
+    gtk_widget_class_install_action(widget_class, "win.history", NULL, history_activated);
+    gtk_widget_class_install_action(widget_class, "win.export-plain", NULL,
+                                    export_plain_activated);
     gtk_widget_class_install_action(widget_class, "win.reload-desktop", NULL,
                                     reload_desktop_activated);
     gtk_widget_class_install_action(widget_class, "win.refresh", NULL, refresh_activated);

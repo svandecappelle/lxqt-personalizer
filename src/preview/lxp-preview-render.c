@@ -561,18 +561,29 @@ static void draw_openbox_menu(Ctx *ctx, double x, double y)
 
 /* --- panel -------------------------------------------------------------- */
 
+/* Length of the panel along its edge, and where it starts on that edge. */
+static void panel_extent(const LxpPreviewModel *m, double side, double *start, double *len)
+{
+    double l = m->panel_width_percent ? side * m->panel_width / 100.0
+                                      : m->panel_width * VW / SCREEN_WIDTH;
+
+    l = CLAMP(l, 1, side);
+    *len = l;
+    *start = m->panel_alignment < 0 ? 0 : m->panel_alignment > 0 ? side - l : (side - l) / 2;
+}
+
 static Rect panel_rect(const LxpPreviewModel *m)
 {
     double s = m->panel_size;
     const char *pos = m->panel_position;
+    double start, len;
 
-    if (g_str_equal(pos, "Top"))
-        return (Rect){ 0, 0, VW, s };
-    if (g_str_equal(pos, "Left"))
-        return (Rect){ 0, 0, s, VH };
-    if (g_str_equal(pos, "Right"))
-        return (Rect){ VW - s, 0, s, VH };
-    return (Rect){ 0, VH - s, VW, s };
+    if (g_str_equal(pos, "Left") || g_str_equal(pos, "Right")) {
+        panel_extent(m, VH, &start, &len);
+        return (Rect){ g_str_equal(pos, "Left") ? 0 : VW - s, start, s, len };
+    }
+    panel_extent(m, VW, &start, &len);
+    return (Rect){ start, g_str_equal(pos, "Top") ? 0 : VH - s, len, s };
 }
 
 static Rect work_area(const LxpPreviewModel *m)
@@ -580,6 +591,8 @@ static Rect work_area(const LxpPreviewModel *m)
     Rect p = panel_rect(m);
     const char *pos = m->panel_position;
 
+    if (!m->panel_reserve_space)
+        return (Rect){ 0, 0, VW, VH };
     if (g_str_equal(pos, "Top"))
         return (Rect){ 0, p.h, VW, VH - p.h };
     if (g_str_equal(pos, "Left"))
@@ -606,6 +619,9 @@ static void draw_panel(Ctx *ctx)
     double pos = 6;
     LxpColor edge = lxp_color_mix(&m->panel_bg, &m->panel_text, 0.2);
 
+    cairo_save(cr);
+    cairo_rectangle(cr, p.x, p.y, p.w, p.h);
+    cairo_clip(cr);
     fill_rect(cr, p, &m->panel_bg, m->panel_opacity);
     if (horizontal)
         fill_rect(cr, (Rect){ p.x, g_str_equal(m->panel_position, "Top") ? p.y + p.h - 1 : p.y,
@@ -626,12 +642,19 @@ static void draw_panel(Ctx *ctx)
     }
     pos += 10;
 
-    /* task buttons: the active "Files" window first */
-    for (int i = 0; i < 2; i++) {
+    /*
+     * Task buttons, the active "Files" window first, sharing the room left
+     * between the launchers and the tray; icon-only when it gets tight.
+     */
+    double room = (horizontal ? p.w : p.h) - pos - (horizontal ? 86 + 2 * isz : 64 + isz);
+    double task_len = horizontal ? CLAMP(room / 2 - 4, isz + 12, 200) : thick - 4;
+    gboolean labels = horizontal && task_len >= isz + 60;
+
+    for (int i = 0; i < 2 && room >= 2 * (isz + 16); i++) {
         const char *label = i == 0 ? "Files — Home" : "Text Editor";
         const char *const *names = i == 0 ? ICON("system-file-manager", "folder")
                                           : ICON("accessories-text-editor", "text-editor");
-        double len = horizontal ? 200 : thick - 4;
+        double len = task_len;
         Rect b = horizontal ? (Rect){ p.x + pos, p.y + 3, len, p.h - 6 }
                             : (Rect){ p.x + 2, p.y + pos, thick - 4, len };
 
@@ -641,10 +664,12 @@ static void draw_panel(Ctx *ctx)
         else
             set_color(cr, &m->panel_text, 0.08);
         cairo_fill(cr);
-        if (horizontal) {
+        if (labels) {
             icon(ctx, names, b.x + 6, p.y + off, isz);
             ui_text(ctx, (Rect){ b.x + isz + 12, b.y, b.w - isz - 18, b.h }, label,
                     &m->panel_text, ALIGN_LEFT);
+        } else if (horizontal) {
+            icon(ctx, names, b.x + (b.w - isz) / 2, p.y + off, isz);
         } else {
             icon(ctx, names, p.x + off, b.y + (b.h - isz) / 2, isz);
         }
@@ -668,6 +693,7 @@ static void draw_panel(Ctx *ctx)
              p.x + off, end - 52 - isz, isz);
     }
 #undef AT
+    cairo_restore(cr);
 }
 
 /* --- compositor ---------------------------------------------------------- */
@@ -737,12 +763,16 @@ void lxp_preview_render(cairo_t *cr, const LxpPreviewModel *m, double width, dou
 
     editor = (Rect){ wa.x + wa.w * 0.40, wa.y + 40, 700, 420 };
     editor.x = clampd(editor.x, wa.x, wa.x + wa.w - editor.w);
+    /* the inactive window, with picom's inactive-opacity */
+    cairo_push_group(cr);
     draw_shadow(&ctx, editor);
     clip_window(&ctx, editor);
     client = draw_frame(&ctx, editor, FALSE, "notes.md — Text Editor",
                         ICON("accessories-text-editor", "text-editor"));
     draw_editor(&ctx, client);
     cairo_restore(cr);
+    cairo_pop_group_to_source(cr);
+    cairo_paint_with_alpha(cr, m->inactive_opacity);
 
     files = (Rect){ wa.x + 150, wa.y + wa.h - 540, 820, 500 };
     files.y = clampd(files.y, wa.y + 10, wa.y + wa.h - files.h);

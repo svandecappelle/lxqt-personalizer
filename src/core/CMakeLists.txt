@@ -38,7 +38,8 @@ add_library(lxp STATIC
     backends/cursor.c
     backends/wallpaper.c
     backends/panel.c
-    backends/compositor.c)
+    backends/compositor.c
+    backends/kvantum.c)
 
 target_include_directories(lxp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

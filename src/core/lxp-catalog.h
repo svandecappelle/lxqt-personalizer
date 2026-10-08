@@ -13,7 +13,11 @@ typedef enum {
     LXP_CATALOG_LXQT,        /* lxqt/themes/X */
     LXP_CATALOG_CURSORS,     /* icons/X/cursors */
     LXP_CATALOG_QT_STYLES,   /* Fusion, Windows and installed style plugins */
+    LXP_CATALOG_KVANTUM,     /* Kvantum/X/X.kvconfig (config and data dirs) */
 } LxpCatalogKind;
 
 /* Sorted, unique names (case-insensitive order). */
 GPtrArray *lxp_catalog_list(LxpCatalogKind kind);
+
+/* Directory of Kvantum theme <name>, or NULL ("Default" is built in). */
+char      *lxp_catalog_find_kvantum(const char *name);

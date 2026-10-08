@@ -358,6 +358,42 @@ static void test_keep_installed(void)
     lxp_scheme_clear(&s);
 }
 
+static void test_scheme_options(void)
+{
+    g_autoptr(LxpTheme) theme = nord_theme("Options");
+    g_autofree char *dir = g_build_filename(g_get_user_data_dir(), "options", NULL);
+    g_autoptr(GError) error = NULL;
+    g_auto(GStrv) title = NULL, item = NULL;
+    g_autofree char *gtk_font = NULL, *dark = NULL, *link = NULL, *follow = NULL;
+
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_font", "Noto Serif Bold Italic 12");
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "gtk_font", "Cantarell 11");
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "prefer_dark", "false");
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "link", "#ff0000");
+    lxp_theme_set_string(theme, "LXQt", "icon_follow_color_scheme", "false");
+
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    g_assert_no_error(error);
+
+    title = lxp_theme_get_string_list(theme, "Openbox", "font_ActiveWindow");
+    g_assert_cmpstr(title[0], ==, "Noto Serif");
+    g_assert_cmpstr(title[1], ==, "12");
+    g_assert_cmpstr(title[2], ==, "Bold");
+    g_assert_cmpstr(title[3], ==, "Italic");
+    item = lxp_theme_get_string_list(theme, "Openbox", "font_MenuItem");
+    g_assert_cmpstr(item[0], ==, "Noto Sans");   /* the text font */
+    g_assert_cmpstr(item[2], ==, "Normal");
+
+    gtk_font = lxp_theme_get_string(theme, "GTK", "font");
+    g_assert_cmpstr(gtk_font, ==, "Cantarell 11");
+    dark = lxp_theme_get_string(theme, "GTK", "prefer_dark");
+    g_assert_cmpstr(dark, ==, "false");          /* overrides the dark colors */
+    link = lxp_theme_get_string(theme, "LXQt Palette", "link_color");
+    g_assert_cmpstr(link, ==, "#ff0000");
+    follow = lxp_theme_get_string(theme, "LXQt", "icon_follow_color_scheme");
+    g_assert_cmpstr(follow, ==, "false");        /* no longer forced */
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
@@ -370,5 +406,6 @@ int main(int argc, char **argv)
     g_test_add_func("/generate/apply", test_apply_generated);
     g_test_add_func("/generate/rename-and-wallpaper", test_rename_and_wallpaper);
     g_test_add_func("/generate/keep-installed", test_keep_installed);
+    g_test_add_func("/generate/scheme-options", test_scheme_options);
     return g_test_run();
 }

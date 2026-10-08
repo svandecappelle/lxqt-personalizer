@@ -41,7 +41,11 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
     s->has_accent_text = get_color(theme, "accent_text", &s->accent_text, FALSE, NULL);
     s->has_title = get_color(theme, "title", &s->title, FALSE, NULL);
     s->has_panel = get_color(theme, "panel", &s->panel, FALSE, NULL);
+    s->has_link = get_color(theme, "link", &s->link, FALSE, NULL);
     s->font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "font");
+    s->title_font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_font");
+    s->gtk_font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "gtk_font");
+    s->prefer_dark = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "prefer_dark");
     s->style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "style");
     {
         g_auto(GStrv) parts = lxp_theme_get_string_list(theme, LXP_SCHEME_GROUP, "generate");
@@ -69,7 +73,14 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
     set_color(theme, "accent_text", &s->accent_text, s->has_accent_text);
     set_color(theme, "title", &s->title, s->has_title);
     set_color(theme, "panel", &s->panel, s->has_panel);
+    set_color(theme, "link", &s->link, s->has_link);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "font", s->font && *s->font ? s->font : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_font",
+                         s->title_font && *s->title_font ? s->title_font : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "gtk_font",
+                         s->gtk_font && *s->gtk_font ? s->gtk_font : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "prefer_dark",
+                         s->prefer_dark && *s->prefer_dark ? s->prefer_dark : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "style",
                          s->style && *s->style ? s->style : NULL);
 
@@ -114,6 +125,9 @@ gboolean lxp_scheme_from_palette(const LxpTheme *theme, LxpScheme *s)
 void lxp_scheme_clear(LxpScheme *s)
 {
     g_clear_pointer(&s->font, g_free);
+    g_clear_pointer(&s->title_font, g_free);
+    g_clear_pointer(&s->gtk_font, g_free);
+    g_clear_pointer(&s->prefer_dark, g_free);
     g_clear_pointer(&s->style, g_free);
 }
 
@@ -152,9 +166,15 @@ void lxp_scheme_derive(const LxpScheme *s, LxpSchemeColors *c)
     c->accent = s->accent;
     c->accent_fg = s->has_accent_text ? s->accent_text : readable_on(&c->accent, NULL);
 
-    lxp_color_to_hsl(&c->accent, &h, &sat, &l);
-    c->link = lxp_color_from_hsl(h, sat, c->dark ? MAX(l, 0.68) : MIN(l, 0.40), 1);
-    c->link_visited = lxp_color_from_hsl(h + 45, sat, c->dark ? MAX(l, 0.68) : MIN(l, 0.40), 1);
+    if (s->has_link) {
+        c->link = s->link;
+        lxp_color_to_hsl(&c->link, &h, &sat, &l);
+        c->link_visited = lxp_color_from_hsl(h + 45, sat, l, 1);
+    } else {
+        lxp_color_to_hsl(&c->accent, &h, &sat, &l);
+        c->link = lxp_color_from_hsl(h, sat, c->dark ? MAX(l, 0.68) : MIN(l, 0.40), 1);
+        c->link_visited = lxp_color_from_hsl(h + 45, sat, c->dark ? MAX(l, 0.68) : MIN(l, 0.40), 1);
+    }
 
     if (s->has_title) {
         c->title_active = s->title;
@@ -346,6 +366,62 @@ static void split_font(const char *font, char **family, double *size)
     }
 }
 
+/* "Noto Sans Bold Italic" -> family "Noto Sans", bold, italic */
+static char *strip_style_words(const char *family, gboolean *bold, gboolean *italic)
+{
+    g_auto(GStrv) words = g_strsplit(family, " ", -1);
+    g_autoptr(GStrvBuilder) kept = g_strv_builder_new();
+    g_auto(GStrv) out = NULL;
+
+    *bold = *italic = FALSE;
+    for (char **w = words; *w; w++) {
+        if (g_ascii_strcasecmp(*w, "Bold") == 0)
+            *bold = TRUE;
+        else if (g_ascii_strcasecmp(*w, "Italic") == 0 || g_ascii_strcasecmp(*w, "Oblique") == 0)
+            *italic = TRUE;
+        else if (g_ascii_strcasecmp(*w, "Regular") != 0 && **w)
+            g_strv_builder_add(kept, *w);
+    }
+    out = g_strv_builder_end(kept);
+    return out[0] ? g_strjoinv(" ", out) : g_strdup("Sans");
+}
+
+/*
+ * Openbox fonts: window titles and menu headers use title_font (or the
+ * font in bold), menu items and on-screen displays the font.
+ */
+static void set_openbox_fonts(LxpTheme *theme, const LxpScheme *s)
+{
+    static const char *const places[] = {
+        "ActiveWindow", "InactiveWindow", "MenuHeader", "MenuItem",
+        "ActiveOnScreenDisplay", "InactiveOnScreenDisplay",
+    };
+
+    if (!(s->font && *s->font) && !(s->title_font && *s->title_font))
+        return;
+    for (gsize i = 0; i < G_N_ELEMENTS(places); i++) {
+        gboolean title = i < 3;
+        const char *spec = title && s->title_font && *s->title_font ? s->title_font : s->font;
+        g_autofree char *raw = NULL, *family = NULL, *key = NULL, *size_text = NULL;
+        gboolean bold, italic;
+        double size;
+
+        if (!spec || !*spec)
+            continue;
+        split_font(spec, &raw, &size);
+        family = strip_style_words(raw, &bold, &italic);
+        if (title && !(s->title_font && *s->title_font))
+            bold = TRUE;  /* titles default to bold */
+        key = g_strconcat("font_", places[i], NULL);
+        size_text = g_strdup_printf("%g", size);
+        {
+            const char *values[] = { family, size_text, bold ? "Bold" : "Normal",
+                                     italic ? "Italic" : "Normal", NULL };
+            lxp_theme_set_string_list(theme, "Openbox", key, values);
+        }
+    }
+}
+
 static void set_theme_keys(LxpTheme *theme, const char *name, const LxpScheme *s,
                            const LxpSchemeColors *c)
 {
@@ -359,7 +435,9 @@ static void set_theme_keys(LxpTheme *theme, const char *name, const LxpScheme *s
     if (!s->keep_lxqt)
         lxp_theme_set_string(theme, "LXQt", "theme", name);
     lxp_theme_set_string(theme, "LXQt", "style", s->style && *s->style ? s->style : "Fusion");
-    lxp_theme_set_string(theme, "LXQt", "icon_follow_color_scheme", "true");
+    if (!g_key_file_has_key(lxp_theme_get_keyfile(theme), "LXQt",
+                            "icon_follow_color_scheme", NULL))
+        lxp_theme_set_string(theme, "LXQt", "icon_follow_color_scheme", "true");
     lxp_theme_remove_group(theme, "LXQt Palette");
     for (gsize i = 0; i < G_N_ELEMENTS(palette); i++) {
         g_autofree char *v = lxp_color_to_hex(palette[i].color);
@@ -370,7 +448,8 @@ static void set_theme_keys(LxpTheme *theme, const char *name, const LxpScheme *s
         lxp_theme_set_string(theme, "Openbox", "theme", name);
     if (!s->keep_gtk)
         lxp_theme_set_string(theme, "GTK", "theme", name);
-    lxp_theme_set_string(theme, "GTK", "prefer_dark", c->dark ? "true" : "false");
+    lxp_theme_set_string(theme, "GTK", "prefer_dark",
+                         s->prefer_dark ? s->prefer_dark : c->dark ? "true" : "false");
 
     /* the generated LXQt theme styles the panel */
     if (!s->keep_lxqt) {
@@ -379,27 +458,18 @@ static void set_theme_keys(LxpTheme *theme, const char *name, const LxpScheme *s
     }
 
     if (s->font && *s->font) {
-        static const char *const places[] = {
-            "ActiveWindow", "InactiveWindow", "MenuHeader", "MenuItem",
-            "ActiveOnScreenDisplay", "InactiveOnScreenDisplay",
-        };
         g_autofree char *family = NULL;
         g_autofree char *qt = NULL;
-        g_autofree char *size_text = NULL;
         double size;
 
         split_font(s->font, &family, &size);
-        size_text = g_strdup_printf("%g", size);
         qt = g_strdup_printf("%s,%g,-1,5,50,0,0,0,0,0", family, size);
         lxp_theme_set_string(theme, "LXQt", "font", qt);
-        lxp_theme_set_string(theme, "GTK", "font", s->font);
-        for (gsize i = 0; i < G_N_ELEMENTS(places); i++) {
-            g_autofree char *key = g_strconcat("font_", places[i], NULL);
-            const char *weight = i < 3 ? "Bold" : "Normal";
-            const char *values[] = { family, size_text, weight, "Normal", NULL };
-            lxp_theme_set_string_list(theme, "Openbox", key, values);
-        }
     }
+    if ((s->gtk_font && *s->gtk_font) || (s->font && *s->font))
+        lxp_theme_set_string(theme, "GTK", "font",
+                             s->gtk_font && *s->gtk_font ? s->gtk_font : s->font);
+    set_openbox_fonts(theme, s);
 }
 
 /* Remove generated units of <kind> other than <keep> (e.g. after a rename). */

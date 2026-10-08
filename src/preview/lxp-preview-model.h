@@ -54,6 +54,10 @@ typedef struct {
     int      panel_size;
     int      panel_icon_size;
     double   panel_opacity;      /* 0..1 */
+    int      panel_width;        /* percent, or pixels when !panel_width_percent */
+    gboolean panel_width_percent;
+    int      panel_alignment;    /* -1 start, 0 center, 1 end */
+    gboolean panel_reserve_space;
     LxpColor panel_bg, panel_text;
 
     /* Compositor (picom); defaults are picom's */
@@ -62,6 +66,7 @@ typedef struct {
     int      shadow_radius;
     double   shadow_opacity;
     int      shadow_offset_x, shadow_offset_y;
+    double   inactive_opacity;   /* 0..1 */
 
     /* Desktop */
     char    *wallpaper;          /* absolute path or NULL */

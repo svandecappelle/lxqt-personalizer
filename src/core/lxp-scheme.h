@@ -17,6 +17,10 @@
  *   title=#5e81ac          optional, active title bar (else neutral)
  *   panel=#242933          optional, panel background (else derived)
  *   font=Noto Sans 10      optional
+ *   title_font=Noto Sans Bold 10   optional window title font (else font, bold)
+ *   gtk_font=Cantarell 11  optional font of GTK applications (else font)
+ *   prefer_dark=true       optional dark GTK variant (else from the colors)
+ *   link=#5e81ac           optional link color (else derived from accent)
  *   style=kvantum          optional Qt widget style (default Fusion, which
  *                          follows the palette everywhere)
  *   generate=openbox;gtk;lxqt
@@ -29,9 +33,12 @@
 
 typedef struct {
     LxpColor background, surface, foreground, accent;
-    LxpColor accent_text, title, panel;
-    gboolean has_accent_text, has_title, has_panel;
+    LxpColor accent_text, title, panel, link;
+    gboolean has_accent_text, has_title, has_panel, has_link;
     char    *font;
+    char    *title_font;
+    char    *gtk_font;
+    char    *prefer_dark;    /* "true", "false" or NULL (automatic) */
     char    *style;
     /* use the installed theme named in the theme instead of generating */
     gboolean keep_openbox, keep_gtk, keep_lxqt;

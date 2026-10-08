@@ -213,6 +213,17 @@ static void load_panel(LxpPreviewModel *m, const LxpTheme *theme)
     m->panel_size = CLAMP(theme_int(theme, "Panel", "panelSize", 32), 16, 128);
     m->panel_icon_size = CLAMP(theme_int(theme, "Panel", "iconSize", 22), 8, 96);
     m->panel_opacity = CLAMP(theme_int(theme, "Panel", "opacity", 100), 0, 100) / 100.0;
+    {
+        g_autofree char *percent = lxp_theme_get_string(theme, "Panel", "width-percent");
+        g_autofree char *reserve = lxp_theme_get_string(theme, "Panel", "reserve-space");
+
+        m->panel_width_percent = !percent || g_ascii_strcasecmp(percent, "false") != 0;
+        m->panel_width = MAX(1, theme_int(theme, "Panel", "width", 100));
+        if (m->panel_width_percent)
+            m->panel_width = MIN(m->panel_width, 100);
+        m->panel_alignment = CLAMP(theme_int(theme, "Panel", "alignment", -1), -1, 1);
+        m->panel_reserve_space = !reserve || g_ascii_strcasecmp(reserve, "false") != 0;
+    }
 
     /* Without a panel color, the LXQt theme decides: ours if generated. */
     if (has_scheme)
@@ -252,6 +263,10 @@ static void load_compositor(LxpPreviewModel *m, const LxpTheme *theme)
     m->shadow_opacity = opacity ? CLAMP(g_ascii_strtod(opacity, NULL), 0, 1) : 0.75;
     m->shadow_offset_x = theme_int(theme, "Compositor", "shadow_offset_x", -15);
     m->shadow_offset_y = theme_int(theme, "Compositor", "shadow_offset_y", -15);
+    {
+        g_autofree char *inactive = lxp_theme_get_string(theme, "Compositor", "inactive_opacity");
+        m->inactive_opacity = inactive ? CLAMP(g_ascii_strtod(inactive, NULL), 0.1, 1) : 1;
+    }
 }
 
 LxpPreviewModel *lxp_preview_model_new(const LxpTheme *theme)

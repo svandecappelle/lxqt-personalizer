@@ -114,7 +114,10 @@ static void activate(GApplication *app, gpointer user)
 
 int main(int argc, char **argv)
 {
-    g_autoptr(GtkApplication) app = gtk_application_new(LXP_DBUS_ID, G_APPLICATION_DEFAULT_FLAGS);
+    /* screenshot runs must not hand over to an already running instance */
+    GApplicationFlags flags = g_getenv("LXP_SCREENSHOT") ? G_APPLICATION_NON_UNIQUE
+                                                         : G_APPLICATION_DEFAULT_FLAGS;
+    g_autoptr(GtkApplication) app = gtk_application_new(LXP_DBUS_ID, flags);
 
     g_set_application_name("Desktop Themes");
     g_signal_connect(app, "startup", G_CALLBACK(startup), NULL);

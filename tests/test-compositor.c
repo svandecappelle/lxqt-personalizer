@@ -167,6 +167,54 @@ static void test_capture_and_model(void)
     g_assert_cmpint(defaults->shadow_radius, ==, 12);
 }
 
+static void test_kvantum(void)
+{
+    const LxpBackend *kvantum = lxp_backend_find("kvantum");
+    g_autoptr(LxpTheme) captured = lxp_theme_new("Captured");
+    g_autoptr(LxpTheme) theme = lxp_theme_new("Kv");
+    g_autoptr(LxpTheme) missing = lxp_theme_new("Missing");
+    g_autoptr(GError) error = NULL;
+    g_autofree char *name = NULL, *conf = NULL;
+
+    write_file(g_get_user_config_dir(), "Kvantum/kvantum.kvconfig",
+               "[General]\ntheme=SensualKvantum\n");
+    write_file(g_get_user_config_dir(), "Kvantum/SensualKvantum/SensualKvantum.kvconfig", "");
+    write_file(g_get_system_data_dirs()[0], "Kvantum/KvArc/KvArc.kvconfig", "");
+
+    g_assert_true(kvantum->capture(captured, &error));
+    name = lxp_theme_get_string(captured, "Kvantum", "theme");
+    g_assert_cmpstr(name, ==, "SensualKvantum");
+
+    lxp_theme_set_string(theme, "Kvantum", "theme", "KvArc");
+    g_assert_true(kvantum->check(theme, &error));
+    g_assert_true(kvantum->apply(theme, &error));
+    g_assert_no_error(error);
+    conf = read_file(g_get_user_config_dir(), "Kvantum/kvantum.kvconfig");
+    g_assert_cmpstr(conf, ==, "[General]\ntheme=KvArc\n");
+
+    lxp_theme_set_string(missing, "Kvantum", "theme", "NoSuchKv");
+    g_assert_false(kvantum->check(missing, &error));
+    g_assert_error(error, LXP_ERROR, LXP_ERROR_NOT_FOUND);
+}
+
+static void test_panel_and_opacity_model(void)
+{
+    g_autoptr(LxpTheme) theme = lxp_theme_new("Panel");
+    g_autoptr(LxpPreviewModel) m = NULL;
+
+    lxp_theme_set_string(theme, "Panel", "width", "600");
+    lxp_theme_set_string(theme, "Panel", "width-percent", "false");
+    lxp_theme_set_string(theme, "Panel", "alignment", "0");
+    lxp_theme_set_string(theme, "Panel", "reserve-space", "false");
+    lxp_theme_set_string(theme, "Compositor", "inactive_opacity", "0.8");
+    m = lxp_preview_model_new(theme);
+    g_assert_cmpint(m->panel_width, ==, 600);
+    g_assert_false(m->panel_width_percent);
+    g_assert_cmpint(m->panel_alignment, ==, 0);
+    g_assert_false(m->panel_reserve_space);
+    g_assert_cmpfloat(m->inactive_opacity, ==, 0.8);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
@@ -175,5 +223,7 @@ int main(int argc, char **argv)
     g_test_add_func("/compositor/system-config", test_system_config);
     g_test_add_func("/compositor/check", test_check);
     g_test_add_func("/compositor/capture-and-model", test_capture_and_model);
+    g_test_add_func("/compositor/kvantum", test_kvantum);
+    g_test_add_func("/compositor/panel-and-opacity-model", test_panel_and_opacity_model);
     return g_test_run();
 }

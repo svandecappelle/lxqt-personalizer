@@ -106,6 +106,55 @@ static void scan_qt_styles(GPtrArray *names, GHashTable *seen)
     }
 }
 
+/* Where Kvantum looks for themes: its config dir, then the data dirs. */
+static GPtrArray *kvantum_dirs(void)
+{
+    GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
+
+    g_ptr_array_add(dirs, g_build_filename(g_get_user_config_dir(), "Kvantum", NULL));
+    g_ptr_array_add(dirs, g_build_filename(g_get_user_data_dir(), "Kvantum", NULL));
+    for (const char *const *d = g_get_system_data_dirs(); *d; d++)
+        g_ptr_array_add(dirs, g_build_filename(*d, "Kvantum", NULL));
+    return dirs;
+}
+
+static gboolean is_kvantum_theme(const char *dir, const char *name)
+{
+    g_autofree char *kvconfig = g_strconcat(name, ".kvconfig", NULL);
+    g_autofree char *svg = g_strconcat(name, ".svg", NULL);
+    g_autofree char *a = g_build_filename(dir, name, kvconfig, NULL);
+    g_autofree char *b = g_build_filename(dir, name, svg, NULL);
+
+    return g_file_test(a, G_FILE_TEST_IS_REGULAR) || g_file_test(b, G_FILE_TEST_IS_REGULAR);
+}
+
+char *lxp_catalog_find_kvantum(const char *name)
+{
+    g_autoptr(GPtrArray) dirs = kvantum_dirs();
+
+    if (!name || !*name || strchr(name, G_DIR_SEPARATOR))
+        return NULL;
+    for (guint i = 0; i < dirs->len; i++)
+        if (is_kvantum_theme(g_ptr_array_index(dirs, i), name))
+            return g_build_filename(g_ptr_array_index(dirs, i), name, NULL);
+    return NULL;
+}
+
+static void scan_kvantum(GPtrArray *names, GHashTable *seen)
+{
+    g_autoptr(GPtrArray) dirs = kvantum_dirs();
+
+    add_unique(names, seen, "Default");
+    for (guint i = 0; i < dirs->len; i++) {
+        g_autoptr(GDir) dir = g_dir_open(g_ptr_array_index(dirs, i), 0, NULL);
+        const char *name;
+
+        while (dir && (name = g_dir_read_name(dir)))
+            if (name[0] != '.' && is_kvantum_theme(g_ptr_array_index(dirs, i), name))
+                add_unique(names, seen, name);
+    }
+}
+
 GPtrArray *lxp_catalog_list(LxpCatalogKind kind)
 {
     GPtrArray *names = g_ptr_array_new_with_free_func(g_free);
@@ -130,6 +179,9 @@ GPtrArray *lxp_catalog_list(LxpCatalogKind kind)
         break;
     case LXP_CATALOG_QT_STYLES:
         scan_qt_styles(names, seen);
+        break;
+    case LXP_CATALOG_KVANTUM:
+        scan_kvantum(names, seen);
         break;
     }
     g_ptr_array_sort_values(names, (GCompareFunc)g_ascii_strcasecmp);
