@@ -215,6 +215,52 @@ static void test_panel_and_opacity_model(void)
     g_assert_cmpfloat(m->inactive_opacity, ==, 0.8);
 }
 
+static void test_blur_and_animations(void)
+{
+    const LxpBackend *compositor = lxp_backend_find("compositor");
+    g_autoptr(LxpTheme) theme = lxp_theme_new("Fx");
+    g_autoptr(LxpTheme) captured = lxp_theme_new("Captured");
+    g_autoptr(LxpTheme) custom = lxp_theme_new("Custom");
+    g_autoptr(GError) error = NULL;
+    g_autofree char *conf = NULL, *anim = NULL, *blur = NULL, *strength = NULL;
+
+    install_picom(TRUE);
+    write_file(g_get_user_config_dir(), "picom.conf",
+               "backend = \"glx\";\nanimations = ( { triggers = [\"open\"]; preset = \"fly-in\"; } );\n");
+
+    /* the user's own animations are kept unless the theme picks a preset */
+    lxp_theme_set_string(custom, "Compositor", "corner_radius", "4");
+    g_assert_true(compositor->apply(custom, &error));
+    conf = read_file(g_get_user_config_dir(), "picom.conf");
+    g_assert_nonnull(strstr(conf, "fly-in"));
+    g_clear_pointer(&conf, g_free);
+
+    lxp_theme_set_string(theme, "Compositor", "blur", "true");
+    lxp_theme_set_string(theme, "Compositor", "blur_strength", "7");
+    lxp_theme_set_string(theme, "Compositor", "animations", "smooth");
+    g_assert_true(compositor->check(theme, &error));
+    g_assert_true(compositor->apply(theme, &error));
+    g_assert_no_error(error);
+    conf = read_file(g_get_user_config_dir(), "picom.conf");
+    g_assert_nonnull(strstr(conf, "blur-method = \"dual_kawase\";"));
+    g_assert_nonnull(strstr(conf, "blur-strength = 7;"));
+    g_assert_nonnull(strstr(conf, "preset = \"geometry-change\""));
+    g_assert_null(strstr(conf, "fly-in"));
+
+    /* and captured back as the same preset */
+    g_assert_true(compositor->capture(captured, &error));
+    anim = lxp_theme_get_string(captured, "Compositor", "animations");
+    blur = lxp_theme_get_string(captured, "Compositor", "blur");
+    strength = lxp_theme_get_string(captured, "Compositor", "blur_strength");
+    g_assert_cmpstr(anim, ==, "smooth");
+    g_assert_cmpstr(blur, ==, "true");
+    g_assert_cmpstr(strength, ==, "7");
+
+    lxp_theme_set_string(theme, "Compositor", "animations", "wobbly");
+    g_assert_false(compositor->check(theme, &error));
+    g_assert_error(error, LXP_ERROR, LXP_ERROR_INVALID);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
@@ -224,6 +270,7 @@ int main(int argc, char **argv)
     g_test_add_func("/compositor/check", test_check);
     g_test_add_func("/compositor/capture-and-model", test_capture_and_model);
     g_test_add_func("/compositor/kvantum", test_kvantum);
+    g_test_add_func("/compositor/blur-and-animations", test_blur_and_animations);
     g_test_add_func("/compositor/panel-and-opacity-model", test_panel_and_opacity_model);
     return g_test_run();
 }

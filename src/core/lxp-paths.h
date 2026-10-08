@@ -8,6 +8,16 @@
 /* ~/.local/share/lxqt-personalizer/themes */
 char *lxp_paths_themes_dir(void);
 
+/*
+ * Directories holding built-in themes: $LXP_BUILTIN_DIR (development),
+ * $XDG_DATA_DIRS/lxqt-personalizer/themes and the install prefix's.
+ * Only existing ones.
+ */
+GPtrArray *lxp_paths_builtin_dirs(void);
+
+/* ~/.cache/lxqt-personalizer/builtin */
+char *lxp_paths_builtin_cache_dir(void);
+
 /* ~/.local/state/lxqt-personalizer/snapshots */
 char *lxp_paths_snapshots_dir(void);
 

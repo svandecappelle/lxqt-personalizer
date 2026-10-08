@@ -58,6 +58,33 @@ theme installs `data/` into `~/.local/share`, never over folders it did not
 create (they carry a `.lxp-asset` marker). Themes stay self-contained: the
 wallpaper is copied into the theme folder.
 
+## Built-in themes
+
+| Theme | Look |
+|---|---|
+| **Mac-like** | Light, frosted top bar, colored window buttons on the left, centered titles, no borders, 12 px corners with deep soft shadows, smooth animations, soft color-field wallpaper. |
+| **Win11-like** | Light, frosted 46 px taskbar, minimal window buttons with a red close on hover, left titles, 8 px corners, subtle animations, wave wallpaper. |
+
+Built-ins are installed read-only in `/usr/share/lxqt-personalizer/themes`
+and generated into `~/.cache/lxqt-personalizer` on first use. **Duplicate &
+Edit…** copies one into your themes to change it. Built-ins keep your icon
+and cursor themes. LXQt cannot center task buttons inside a full-width panel,
+so the Win11-like taskbar keeps them on the left.
+
+## Making themes look different
+
+- **Generated wallpapers** — gradient, blobs, waves or geometric, drawn from
+  the theme's colors (`wallpaper=` and `wallpaper_seed=` in `[Scheme]`, or
+  *Desktop › Source* and *New variation* in the editor).
+- **Window style** — title bar flat or gradient, title height, border,
+  title alignment and buttons: Openbox classic, *minimal* (thin glyphs, red
+  close on hover) or *colored dots*, with any title button layout
+  (`CIML` puts close, minimize and maximize on the left).
+- **Effects** — picom blur behind translucent panels and windows, and
+  animation presets (subtle, smooth, dynamic; picom 12 or newer).
+- **Palette tools** — colors from the wallpaper, light ⇄ dark, opposite or
+  nearby accent.
+
 ## Sharing themes
 
 ```sh

@@ -99,6 +99,60 @@ static char *normalize(SettingType type, const char *value, int min, int max)
     return NULL;
 }
 
+/*
+ * picom 12+ animations, by preset. Each is matched exactly on capture;
+ * anything else in the user's config is kept as is.
+ */
+static const struct {
+    const char *name;
+    const char *value;
+} animation_presets[] = {
+    { "none", "()" },
+    { "subtle",
+      "(\n"
+      "  { triggers = [\"open\", \"show\"]; preset = \"appear\"; duration = 0.15; },\n"
+      "  { triggers = [\"close\", \"hide\"]; preset = \"disappear\"; duration = 0.12; }\n"
+      ")" },
+    { "smooth",
+      "(\n"
+      "  { triggers = [\"open\", \"show\"]; preset = \"appear\"; duration = 0.25; },\n"
+      "  { triggers = [\"close\", \"hide\"]; preset = \"disappear\"; duration = 0.2; },\n"
+      "  { triggers = [\"geometry\"]; preset = \"geometry-change\"; duration = 0.2; }\n"
+      ")" },
+    { "dynamic",
+      "(\n"
+      "  { triggers = [\"open\", \"show\"]; preset = \"slide-in\"; direction = \"down\"; duration = 0.22; },\n"
+      "  { triggers = [\"close\", \"hide\"]; preset = \"slide-out\"; direction = \"up\"; duration = 0.18; },\n"
+      "  { triggers = [\"geometry\"]; preset = \"geometry-change\"; duration = 0.2; }\n"
+      ")" },
+};
+
+static const char *animation_value(const char *name)
+{
+    for (gsize i = 0; i < G_N_ELEMENTS(animation_presets); i++)
+        if (g_strcmp0(animation_presets[i].name, name) == 0)
+            return animation_presets[i].value;
+    return NULL;
+}
+
+/* Compare ignoring whitespace. */
+static gboolean same_text(const char *a, const char *b)
+{
+    while (*a || *b) {
+        while (g_ascii_isspace(*a))
+            a++;
+        while (g_ascii_isspace(*b))
+            b++;
+        if (*a != *b)
+            return FALSE;
+        if (*a) {
+            a++;
+            b++;
+        }
+    }
+    return TRUE;
+}
+
 static gboolean compositor_available(void)
 {
     g_autofree char *bin = g_find_program_in_path("picom");
@@ -132,6 +186,24 @@ static gboolean compositor_check(const LxpTheme *theme, GError **error)
         }
     }
 
+    {
+        g_autofree char *anim = lxp_theme_get_string(theme, GROUP, "animations");
+        g_autofree char *blur = lxp_theme_get_string(theme, GROUP, "blur");
+        g_autofree char *strength = lxp_theme_get_string(theme, GROUP, "blur_strength");
+        g_autofree char *blur_ok = normalize(TYPE_BOOL, blur, 0, 0);
+        g_autofree char *strength_ok = normalize(TYPE_INT, strength, 1, 20);
+
+        if (anim && !g_str_equal(anim, "custom") && !animation_value(anim)) {
+            g_set_error(error, LXP_ERROR, LXP_ERROR_INVALID,
+                        "Unknown animations “%s” (none, subtle, smooth, dynamic)", anim);
+            return FALSE;
+        }
+        if ((blur && !blur_ok) || (strength && !strength_ok)) {
+            g_set_error(error, LXP_ERROR, LXP_ERROR_INVALID, "Invalid blur settings");
+            return FALSE;
+        }
+    }
+
     /* A picom that cannot start (e.g. a missing library) shows nothing. */
     if (!lxp_run(argv, error)) {
         g_prefix_error(error, "picom is installed but does not start: ");
@@ -158,6 +230,26 @@ static gboolean compositor_capture(LxpTheme *theme, GError **error)
         if (norm)
             lxp_theme_set_string(theme, GROUP, settings[i].theme_key, norm);
     }
+
+    {
+        g_autofree char *method = lxp_libconfig_get(conf, "blur-method");
+        g_autofree char *strength = lxp_libconfig_get(conf, "blur-strength");
+        g_autofree char *anim = lxp_libconfig_get(conf, "animations");
+
+        if (method) {
+            gboolean on = !strstr(method, "none");
+            lxp_theme_set_string(theme, GROUP, "blur", on ? "true" : "false");
+            if (on && strength)
+                lxp_theme_set_string(theme, GROUP, "blur_strength", strength);
+        }
+        if (anim) {
+            const char *name = "custom";
+            for (gsize i = 0; i < G_N_ELEMENTS(animation_presets); i++)
+                if (same_text(anim, animation_presets[i].value))
+                    name = animation_presets[i].name;
+            lxp_theme_set_string(theme, GROUP, "animations", name);
+        }
+    }
     return TRUE;
 }
 
@@ -181,6 +273,24 @@ static gboolean compositor_apply(const LxpTheme *theme, GError **error)
                                           settings[i].max);
         if (norm)
             lxp_libconfig_set(conf, settings[i].picom_key, norm);
+    }
+
+    {
+        g_autofree char *blur = lxp_theme_get_string(theme, GROUP, "blur");
+        g_autofree char *strength = lxp_theme_get_string(theme, GROUP, "blur_strength");
+        g_autofree char *anim = lxp_theme_get_string(theme, GROUP, "animations");
+        g_autofree char *on = normalize(TYPE_BOOL, blur, 0, 0);
+        g_autofree char *level = normalize(TYPE_INT, strength, 1, 20);
+        const char *value = animation_value(anim);
+
+        if (on) {
+            lxp_libconfig_set_raw(conf, "blur-method",
+                                  g_str_equal(on, "true") ? "\"dual_kawase\"" : "\"none\"");
+            if (g_str_equal(on, "true"))
+                lxp_libconfig_set(conf, "blur-strength", level ? level : "5");
+        }
+        if (value)  /* "custom" or unset: leave the user's animations alone */
+            lxp_libconfig_set_raw(conf, "animations", value);
     }
     return lxp_libconfig_save(conf, target, error);
 }

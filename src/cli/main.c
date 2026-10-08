@@ -7,6 +7,8 @@
 #include "lxp-paths.h"
 #include "lxp-preview-render.h"
 #include "lxp-scheme.h"
+#include "lxp-themegen.h"
+#include "lxp-wallgen.h"
 #include "lxp-snapshot.h"
 #include "lxp-theme.h"
 
@@ -70,6 +72,16 @@ static gboolean parse_only(const char *value, GStrv *out)
     }
     *out = g_steal_pointer(&ids);
     return TRUE;
+}
+
+/*
+ * Directory to use theme <name> from. Built-in themes are read-only and
+ * are generated into the cache first.
+ */
+static char *resolve_usable(const char *name, GError **error)
+{
+    g_autofree char *dir = lxp_theme_resolve(name, error);
+    return dir ? lxp_theme_materialize(dir, error) : NULL;
 }
 
 static int cmd_backends(int argc, char **argv)
@@ -182,6 +194,8 @@ static int cmd_new(int argc, char **argv)
     g_autofree char *bg = NULL, *surface = NULL, *fg = NULL, *accent = NULL;
     g_autofree char *accent_text = NULL, *title = NULL, *panel = NULL;
     g_autofree char *font = NULL, *icons = NULL, *wallpaper = NULL, *mode = NULL;
+    g_autofree char *wallpaper_style = NULL;
+    int seed = 0;
     g_autofree char *output = NULL;
     gboolean from_current = FALSE, force = FALSE;
     const GOptionEntry entries[] = {
@@ -200,6 +214,10 @@ static int cmd_new(int argc, char **argv)
           "Wallpaper (copied into the theme)", "FILE" },
         { "wallpaper-mode", 0, 0, G_OPTION_ARG_STRING, &mode,
           "zoom, fit, stretch, center, tile or color", "MODE" },
+        { "wallpaper-style", 0, 0, G_OPTION_ARG_STRING, &wallpaper_style,
+          "Generate the wallpaper: gradient, blobs, waves or geometric", "STYLE" },
+        { "seed", 0, 0, G_OPTION_ARG_INT, &seed,
+          "Variation of the generated wallpaper (default: random)", "N" },
         { "output", 'o', 0, G_OPTION_ARG_FILENAME, &output,
           "Write the theme to DIR instead of the themes directory", "DIR" },
         { "force", 'f', 0, G_OPTION_ARG_NONE, &force, "Overwrite an existing theme", NULL },
@@ -244,6 +262,15 @@ static int cmd_new(int argc, char **argv)
         !parse_color_option("panel", panel, &scheme.panel, &scheme.has_panel))
         return 2;
     scheme.font = g_strdup(font);
+    if (wallpaper_style) {
+        if (!lxp_wallgen_is_style(wallpaper_style)) {
+            g_printerr("lxp: unknown wallpaper style “%s”\n", wallpaper_style);
+            lxp_scheme_clear(&scheme);
+            return 2;
+        }
+        scheme.wallpaper = g_strdup(wallpaper_style);
+        scheme.wallpaper_seed = seed > 0 ? (guint32)seed : (guint32)g_random_int_range(1, 100000);
+    }
     lxp_scheme_save(&scheme, theme);
 
     if (icons) {
@@ -257,7 +284,8 @@ static int cmd_new(int argc, char **argv)
     }
 
     if (!lxp_theme_bundle_wallpaper(theme, dir, &error) ||
-        !lxp_scheme_generate(theme, dir, &error) || !lxp_theme_save(theme, dir, &error))
+        !lxp_theme_generate(theme, dir, LXP_WALLPAPER_WIDTH, LXP_WALLPAPER_HEIGHT, &error) ||
+        !lxp_theme_save(theme, dir, &error))
         goto out;
     g_print("Created theme “%s” in %s\n", argv[1], dir);
     ret = 0;
@@ -278,9 +306,14 @@ static int cmd_generate(int argc, char **argv)
         g_printerr("Usage: lxp generate NAME|DIR\n");
         return 2;
     }
-    if (!(dir = lxp_theme_resolve(argv[1], &error)) ||
+    if ((dir = lxp_theme_resolve(argv[1], &error)) && lxp_theme_is_builtin(dir)) {
+        g_printerr("lxp: “%s” is built in and generated automatically; "
+                   "copy it to change it\n", argv[1]);
+        return 1;
+    }
+    if (!dir ||
         !(theme = lxp_theme_load(dir, &error)) ||
-        !lxp_scheme_generate(theme, dir, &error) ||
+        !lxp_theme_generate(theme, dir, LXP_WALLPAPER_WIDTH, LXP_WALLPAPER_HEIGHT, &error) ||
         !lxp_theme_save(theme, dir, &error))
         return fail(error);
     g_print("Regenerated “%s” from its color scheme\n", lxp_theme_get_name(theme));
@@ -301,6 +334,15 @@ static int cmd_list(int argc, char **argv)
         g_autoptr(LxpTheme) theme = dir ? lxp_theme_load(dir, NULL) : NULL;
 
         g_print("%-24s %s\n", slug, theme ? lxp_theme_get_name(theme) : "(invalid)");
+    }
+
+    {
+        g_autoptr(GPtrArray) builtin = lxp_theme_list_builtin();
+        for (guint i = 0; i < builtin->len; i++) {
+            g_autofree char *slug = g_path_get_basename(builtin->pdata[i]);
+            g_autoptr(LxpTheme) theme = lxp_theme_load(builtin->pdata[i], NULL);
+            g_print("%-24s %s (built-in)\n", slug, theme ? lxp_theme_get_name(theme) : "(invalid)");
+        }
     }
     return 0;
 }
@@ -360,7 +402,7 @@ static int cmd_preview(int argc, char **argv)
 
     if (current) {
         theme = lxp_capture_current("Current desktop", NULL, NULL);
-    } else if (!(dir = lxp_theme_resolve(argv[1], &error)) ||
+    } else if (!(dir = resolve_usable(argv[1], &error)) ||
                !(theme = lxp_theme_load(dir, &error))) {
         return fail(error);
     }
@@ -395,7 +437,7 @@ static int cmd_check(int argc, char **argv)
         g_printerr("Usage: lxp check NAME|DIR\n");
         return 2;
     }
-    if (!(dir = lxp_theme_resolve(argv[1], &error)) || !(theme = lxp_theme_load(dir, &error)))
+    if (!(dir = resolve_usable(argv[1], &error)) || !(theme = lxp_theme_load(dir, &error)))
         return fail(error);
     if (report_missing(theme) > 0)
         return 1;
@@ -432,7 +474,7 @@ static int cmd_export(int argc, char **argv)
         g_printerr("Usage: lxp export [OPTION…] NAME|DIR\n");
         return 2;
     }
-    if (!(dir = lxp_theme_resolve(argv[1], &error)) || !(theme = lxp_theme_load(dir, &error)))
+    if (!(dir = resolve_usable(argv[1], &error)) || !(theme = lxp_theme_load(dir, &error)))
         return fail(error);
 
     if (output) {
@@ -689,7 +731,7 @@ static int cmd_apply(int argc, char **argv)
     }
     selected = (const char *const *)only;
 
-    if (!(dir = lxp_theme_resolve(argv[1], &error)) ||
+    if (!(dir = resolve_usable(argv[1], &error)) ||
         !(theme = lxp_theme_load(dir, &error)))
         return fail(error);
 

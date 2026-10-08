@@ -27,6 +27,7 @@ add_library(lxp STATIC
     lxp-system.c
     lxp-theme.c
     lxp-themerc.c
+    lxp-xbm.c
     lxp-apply.c
     lxp-backend.c
     lxp-catalog.c

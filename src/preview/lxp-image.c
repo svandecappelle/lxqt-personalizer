@@ -28,7 +28,20 @@ gboolean lxp_image_get_size(const char *path, int *width, int *height)
         }
         return ok;
     }
-    return path && gdk_pixbuf_get_file_info(path, width, height) != NULL;
+    if (path && gdk_pixbuf_get_file_info(path, width, height) != NULL)
+        return TRUE;
+    if (path && g_str_has_suffix(path, ".png")) {
+        cairo_surface_t *png = cairo_image_surface_create_from_png(path);
+        gboolean ok = cairo_surface_status(png) == CAIRO_STATUS_SUCCESS;
+
+        if (ok) {
+            *width = cairo_image_surface_get_width(png);
+            *height = cairo_image_surface_get_height(png);
+        }
+        cairo_surface_destroy(png);
+        return ok;
+    }
+    return FALSE;
 }
 
 /* SVG through librsvg: gdk-pixbuf may not have an SVG loader. */
@@ -84,6 +97,32 @@ static cairo_surface_t *surface_from_pixbuf(GdkPixbuf *pixbuf)
     return surface;
 }
 
+/*
+ * PNG through cairo, scaled to <width> x <height>: works even when
+ * gdk-pixbuf cannot load images (e.g. its glycin loaders are not found).
+ */
+static cairo_surface_t *load_png(const char *path, int width, int height)
+{
+    cairo_surface_t *src = cairo_image_surface_create_from_png(path);
+    cairo_surface_t *out;
+    cairo_t *cr;
+
+    if (cairo_surface_status(src) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(src);
+        return NULL;
+    }
+    out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    cr = cairo_create(out);
+    cairo_scale(cr, (double)width / cairo_image_surface_get_width(src),
+                (double)height / cairo_image_surface_get_height(src));
+    cairo_set_source_surface(cr, src, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    cairo_surface_destroy(src);
+    return out;
+}
+
 cairo_surface_t *lxp_image_load(const char *path, int width, int height)
 {
     g_autofree char *key = NULL;
@@ -109,6 +148,8 @@ cairo_surface_t *lxp_image_load(const char *path, int width, int height)
     } else {
         pixbuf = gdk_pixbuf_new_from_file_at_scale(path, width, height, FALSE, NULL);
         surface = pixbuf ? surface_from_pixbuf(pixbuf) : NULL;
+        if (!surface && g_str_has_suffix(path, ".png"))
+            surface = load_png(path, width, height);
     }
     g_hash_table_insert(cache, g_steal_pointer(&key), surface);
     return surface;

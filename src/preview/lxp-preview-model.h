@@ -3,6 +3,13 @@
 
 #include "lxp-color.h"
 #include "lxp-theme.h"
+#include "lxp-xbm.h"
+
+/* Openbox title bar buttons that can have their own bitmap and colors. */
+typedef enum {
+    LXP_BUTTON_CLOSE, LXP_BUTTON_MAX, LXP_BUTTON_ICONIFY, LXP_BUTTON_SHADE,
+    LXP_BUTTON_DESK, LXP_BUTTON_COUNT,
+} LxpButton;
 
 /*
  * Everything the preview needs, resolved from a theme: palette, Openbox
@@ -20,6 +27,7 @@ typedef struct {
     LxpColor button_bg;
     gboolean button_bg_visible;
     LxpColor button_fg;
+    LxpColor button_kind_fg[LXP_BUTTON_COUNT];  /* per button, else button_fg */
     LxpColor border;
     LxpColor handle;
     LxpColor client;             /* client padding area */
@@ -40,6 +48,7 @@ typedef struct {
     LxpDecoration active, inactive;
     int           border_width, padding_width, padding_height;
     int           handle_width, client_padding;
+    LxpXbm       *button_bitmaps[LXP_BUTTON_COUNT];  /* NULL: drawn glyph */
     char         *title_layout;  /* "NLIMC" */
     char         *title_justify; /* "left", "center", "right" */
     char         *title_font_family;
@@ -67,6 +76,8 @@ typedef struct {
     double   shadow_opacity;
     int      shadow_offset_x, shadow_offset_y;
     double   inactive_opacity;   /* 0..1 */
+    gboolean blur;
+    int      blur_strength;      /* 1..20 */
 
     /* Desktop */
     char    *wallpaper;          /* absolute path or NULL */

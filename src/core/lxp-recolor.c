@@ -10,6 +10,12 @@
 
 #define SURFACE_RANGE      0.03
 
+/* Unlike g_str_has_prefix(), does not measure the rest of the string. */
+static gboolean starts_with(const char *p, const char *prefix)
+{
+    return strncmp(p, prefix, strlen(prefix)) == 0;
+}
+
 static double lightness(const LxpColor *c)
 {
     double h, s, l;
@@ -105,7 +111,7 @@ static void append_color(GString *out, const LxpColor *c, gboolean function)
 /* Parse "rgb(r, g, b)" / "rgba(r, g, b, a)" at <p>; returns chars consumed. */
 static size_t parse_rgb_function(const char *p, LxpColor *c)
 {
-    gboolean has_alpha = g_str_has_prefix(p, "rgba(");
+    gboolean has_alpha = starts_with(p, "rgba(");
     const char *start = p + (has_alpha ? 5 : 4);
     const char *end = strchr(start, ')');
     g_autofree char *inner = NULL;
@@ -183,11 +189,11 @@ char *lxp_recolor_css(const char *css, const LxpRecolorPalette *from,
             } else {
                 len = 0;
             }
-        } else if ((g_str_has_prefix(p, "rgb(") || g_str_has_prefix(p, "rgba(")) &&
+        } else if ((starts_with(p, "rgb(") || starts_with(p, "rgba(")) &&
                    (p == css || !is_ident_char(p[-1]))) {
             len = parse_rgb_function(p, &c);
             function = TRUE;
-        } else if ((g_str_has_prefix(p, "white") || g_str_has_prefix(p, "black")) &&
+        } else if ((starts_with(p, "white") || starts_with(p, "black")) &&
                    (p == css || !is_ident_char(p[-1])) && !is_ident_char(p[5])) {
             c.r = c.g = c.b = p[0] == 'w' ? 1 : 0;
             c.a = 1;

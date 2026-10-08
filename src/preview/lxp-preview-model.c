@@ -2,6 +2,8 @@
 #include "lxp-preview-model.h"
 
 #include "lxp-assets.h"
+#include "lxp-ini.h"
+#include "lxp-paths.h"
 #include "lxp-scheme.h"
 #include "lxp-themerc.h"
 
@@ -53,6 +55,24 @@ static void palette_color(const LxpTheme *theme, const char *key, LxpColor *out)
         *out = c;
 }
 
+/*
+ * A theme without icons keeps the desktop's when applied, so preview it
+ * with them: the highest lxqt.conf layer that names an icon theme.
+ */
+static char *current_icon_theme(void)
+{
+    g_autoptr(GPtrArray) layers = lxp_paths_find_config_layers("lxqt/lxqt.conf");
+
+    for (guint i = layers->len; i > 0; i--) {
+        g_autoptr(LxpIni) ini = lxp_ini_load(g_ptr_array_index(layers, i - 1), FALSE, NULL);
+        const char *name = ini ? lxp_ini_get(ini, "General", "icon_theme") : NULL;
+
+        if (name && *name)
+            return g_strdup(name);
+    }
+    return g_strdup("hicolor");
+}
+
 static void load_palette(LxpPreviewModel *m, const LxpTheme *theme)
 {
     g_autofree char *font = lxp_theme_get_string(theme, "LXQt", "font");
@@ -84,8 +104,13 @@ static void load_palette(LxpPreviewModel *m, const LxpTheme *theme)
     m->font_family = g_strdup("Sans");
     m->font_size = 10;
     parse_qt_font(font, &m->font_family, &m->font_size);
-    m->icon_theme = g_strdup(icons ? icons : "hicolor");
+    m->icon_theme = icons ? g_strdup(icons) : current_icon_theme();
 }
+
+/* themerc and .xbm names of LxpButton values */
+static const char *const button_names[LXP_BUTTON_COUNT] = {
+    "close", "max", "iconify", "shade", "desk",
+};
 
 static void load_decoration(LxpDecoration *d, const LxpThemerc *rc,
                             const char *state, const LxpPreviewModel *m,
@@ -128,6 +153,12 @@ static void load_decoration(LxpDecoration *d, const LxpThemerc *rc,
         d->button_bg = d->title_bg;
     if (!lxp_themerc_color(rc, &d->button_fg, k_img, NULL))
         d->button_fg = d->label_text;
+    for (int b = 0; b < LXP_BUTTON_COUNT; b++) {
+        g_autofree char *key = g_strdup_printf("window.%s.button.%s.unpressed.image.color",
+                                               state, button_names[b]);
+        if (!lxp_themerc_color(rc, &d->button_kind_fg[b], key, NULL))
+            d->button_kind_fg[b] = d->button_fg;
+    }
 
     if (!lxp_themerc_color(rc, &d->border, k_border, "border.color", NULL))
         d->border = rgb(0x000000);
@@ -156,6 +187,11 @@ static void load_openbox(LxpPreviewModel *m, const LxpTheme *theme)
     }
 
     m->has_openbox = rc != NULL;
+    for (int b = 0; rc && b < LXP_BUTTON_COUNT; b++) {
+        g_autofree char *file = g_strconcat(button_names[b], ".xbm", NULL);
+        g_autofree char *path = g_build_filename(lxp_themerc_get_dir(rc), file, NULL);
+        m->button_bitmaps[b] = lxp_xbm_load(path);
+    }
     load_decoration(&m->active, rc, "active", m, TRUE);
     load_decoration(&m->inactive, rc, "inactive", m, FALSE);
 
@@ -267,6 +303,11 @@ static void load_compositor(LxpPreviewModel *m, const LxpTheme *theme)
         g_autofree char *inactive = lxp_theme_get_string(theme, "Compositor", "inactive_opacity");
         m->inactive_opacity = inactive ? CLAMP(g_ascii_strtod(inactive, NULL), 0.1, 1) : 1;
     }
+    {
+        g_autofree char *blur = lxp_theme_get_string(theme, "Compositor", "blur");
+        m->blur = blur && g_ascii_strcasecmp(blur, "true") == 0;
+        m->blur_strength = CLAMP(theme_int(theme, "Compositor", "blur_strength", 5), 1, 20);
+    }
 }
 
 LxpPreviewModel *lxp_preview_model_new(const LxpTheme *theme)
@@ -289,6 +330,8 @@ void lxp_preview_model_free(LxpPreviewModel *m)
     g_free(m->name);
     g_free(m->font_family);
     g_free(m->icon_theme);
+    for (int b = 0; b < LXP_BUTTON_COUNT; b++)
+        lxp_xbm_free(m->button_bitmaps[b]);
     g_free(m->title_layout);
     g_free(m->title_justify);
     g_free(m->title_font_family);

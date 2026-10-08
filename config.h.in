@@ -3,3 +3,4 @@
 #define LXP_APP_ID      "lxqt-personalizer"
 #define LXP_VERSION     "@PROJECT_VERSION@"
 #define LXP_DBUS_ID     "io.github.lxqt_personalizer.LxqtPersonalizer"
+#define LXP_INSTALL_DATADIR "@CMAKE_INSTALL_FULL_DATADIR@"

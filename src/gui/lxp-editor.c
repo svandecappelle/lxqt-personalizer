@@ -5,9 +5,12 @@
 #include "lxp-catalog.h"
 #include "lxp-fileutil.h"
 #include "lxp-icons.h"
+#include "lxp-palette.h"
 #include "lxp-paths.h"
 #include "lxp-preview-area.h"
 #include "lxp-scheme.h"
+#include "lxp-themegen.h"
+#include "lxp-wallgen.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -21,6 +24,21 @@ static const char *const wallpaper_modes[] = {
 };
 static const char *const panel_positions[] = { "Bottom", "Top", "Left", "Right", NULL };
 static const char *const dark_modes[] = { "Automatic", "Light", "Dark", NULL };
+static const char *const title_styles[] = { "Flat", "Gradient", NULL };
+static const char *const title_aligns[] = { "Left", "Center", "Right", NULL };
+static const char *const title_align_values[] = { "left", "center", "right", NULL };
+static const char *const button_sets[] = { "Openbox classic", "Minimal", "Colored dots", NULL };
+static const char *const button_set_values[] = { "classic", "minimal", "dots", NULL };
+static const char *const wallpaper_sources[] = {
+    "Image file", "Generated: gradient", "Generated: blobs", "Generated: waves",
+    "Generated: geometric", NULL,
+};
+static const char *const animation_labels[] = {
+    "Keep current", "None", "Subtle", "Smooth", "Dynamic", NULL,
+};
+static const char *const animation_values[] = {
+    "custom", "none", "subtle", "smooth", "dynamic", NULL,
+};
 static const char *const tool_button_labels[] = {
     "Icons only", "Text only", "Text beside icons", "Text under icons",
     "Follow the widget style", NULL,
@@ -91,6 +109,7 @@ typedef struct {
     GtkWidget *title_layout;
     OptionalFont title_font, gtk_font;
     GtkWidget *keep_border, *animate_iconify;
+    GtkWidget *title_style, *title_padding, *border_width, *title_align, *buttons;
     GtkWidget *dark_mode;
     GtkWidget *tool_buttons;
     GtkWidget *icons_follow;
@@ -99,6 +118,10 @@ typedef struct {
 
     /* Desktop */
     GtkWidget *wallpaper_label;
+    GtkWidget *wallpaper_source;
+    GtkWidget *wallpaper_choose;
+    GtkWidget *wallpaper_shuffle;
+    guint32 wallpaper_seed;
     char *wallpaper;
     GtkWidget *wallpaper_mode;
     GtkWidget *panel_position;
@@ -121,6 +144,9 @@ typedef struct {
     GtkWidget *shadow_offset_y;
     GtkWidget *inactive_opacity;
     GtkWidget *fading;
+    GtkWidget *blur, *blur_strength;
+    GtkWidget *animations;
+    GtkWidget *from_wallpaper;
 
     GtkWidget *preview;
     GtkWidget *error;
@@ -317,6 +343,22 @@ static void read_form(Editor *ed, LxpScheme *s)
     default: break;
     }
     s->style = g_strdup(choice_get(&ed->style));
+    if (gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->title_style)) == 1)
+        s->title_style = g_strdup("gradient");
+    s->title_padding = spin_value(ed->title_padding);
+    s->border_width = spin_value(ed->border_width);
+    s->has_border_width = TRUE;
+    s->title_align = g_strdup(title_align_values[
+        MIN(gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->title_align)), 2u)]);
+    s->buttons = g_strdup(button_set_values[
+        MIN(gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->buttons)), 2u)]);
+    {
+        guint source = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->wallpaper_source));
+        if (source >= 1 && source <= 4) {
+            s->wallpaper = g_strdup(lxp_wallgen_styles[source - 1]);
+            s->wallpaper_seed = ed->wallpaper_seed;
+        }
+    }
     s->keep_openbox = choice_get(&ed->openbox) != NULL;
     s->keep_gtk = choice_get(&ed->gtk) != NULL;
     s->keep_lxqt = choice_get(&ed->lxqt) != NULL;
@@ -386,7 +428,8 @@ static void update_theme(Editor *ed)
         lxp_theme_set_string(t, "Cursor", "theme", value);
     set_int(t, "Cursor", "size", spin_value(ed->cursor_size));
 
-    lxp_theme_set_string(t, "Wallpaper", "file", ed->wallpaper);
+    if (gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->wallpaper_source)) == 0)
+        lxp_theme_set_string(t, "Wallpaper", "file", ed->wallpaper);
     lxp_theme_set_string(t, "Wallpaper", "mode", wallpaper_modes[mode]);
     lxp_theme_set_string(t, "Panel", "position", panel_positions[position]);
     set_int(t, "Panel", "panelSize", spin_value(ed->panel_size));
@@ -417,6 +460,14 @@ static void update_theme(Editor *ed)
     g_ascii_formatd(opacity, sizeof(opacity), "%.2f",
                     spin_value(ed->inactive_opacity) / 100.0);
     lxp_theme_set_string(t, "Compositor", "inactive_opacity", opacity);
+    lxp_theme_set_string(t, "Compositor", "blur",
+                         gtk_switch_get_active(GTK_SWITCH(ed->blur)) ? "true" : "false");
+    set_int(t, "Compositor", "blur_strength", spin_value(ed->blur_strength));
+    {
+        guint anim = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->animations));
+        lxp_theme_set_string(t, "Compositor", "animations",
+                             anim == 0 ? NULL : animation_values[MIN(anim, 4u)]);
+    }
 }
 
 /* Automatic colors show the value that will actually be used. */
@@ -448,6 +499,20 @@ static void sync_sensitivity(Editor *ed)
 
     gtk_widget_set_sensitive(ed->kvantum.dropdown,
                              style && g_ascii_strcasecmp(style, "kvantum") == 0);
+    {
+        gboolean generated = choice_get(&ed->openbox) == NULL;
+        gboolean image = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->wallpaper_source)) == 0;
+        GtkWidget *window_style[] = { ed->title_style, ed->title_padding, ed->border_width,
+                                      ed->title_align, ed->buttons };
+
+        for (gsize i = 0; i < G_N_ELEMENTS(window_style); i++)
+            gtk_widget_set_sensitive(window_style[i], generated);
+        gtk_widget_set_sensitive(ed->wallpaper_choose, image);
+        gtk_widget_set_sensitive(ed->wallpaper_mode, image);
+        gtk_widget_set_visible(ed->wallpaper_shuffle, !image);
+        gtk_widget_set_sensitive(ed->from_wallpaper, image && ed->wallpaper != NULL);
+        gtk_widget_set_sensitive(ed->blur_strength, gtk_switch_get_active(GTK_SWITCH(ed->blur)));
+    }
     gtk_widget_set_sensitive(ed->title_font.button,
         !gtk_check_button_get_active(GTK_CHECK_BUTTON(ed->title_font.automatic)));
     gtk_widget_set_sensitive(ed->gtk_font.button,
@@ -499,7 +564,7 @@ static gboolean refresh_preview(gpointer data)
     update_warning(ed);
 
     /* Generate into the work dir: the preview reads the bundled themerc. */
-    if (!lxp_scheme_generate(ed->theme, ed->work_dir, &error) ||
+    if (!lxp_theme_generate(ed->theme, ed->work_dir, 1280, 720, &error) ||
         !lxp_theme_save(ed->theme, ed->work_dir, &error) ||
         !(loaded = lxp_theme_load(ed->work_dir, &error))) {
         gtk_label_set_text(GTK_LABEL(ed->error), error->message);
@@ -577,6 +642,64 @@ static void apply_preset(GtkButton *button, gpointer data)
     schedule_preview(ed);
 }
 
+/* Put the four base colors of <s> in the form; optional ones automatic. */
+static void show_scheme_colors(Editor *ed, const LxpScheme *s)
+{
+    ed->loading = TRUE;
+    set_button(ed->background, &s->background);
+    set_button(ed->surface, &s->surface);
+    set_button(ed->foreground, &s->foreground);
+    set_button(ed->accent, &s->accent);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->accent_text.automatic), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->title.automatic), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->panel_color.automatic), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->link.automatic), TRUE);
+    ed->loading = FALSE;
+    schedule_preview(ed);
+}
+
+static void on_from_wallpaper(GtkButton *button, gpointer data)
+{
+    Editor *ed = data;
+    LxpScheme current, s = { 0 };
+
+    read_form(ed, &current);
+    if (lxp_palette_from_image(ed->wallpaper,
+                               lxp_color_luminance(&current.background) <
+                               lxp_color_luminance(&current.foreground), &s))
+        show_scheme_colors(ed, &s);
+    lxp_scheme_clear(&current);
+}
+
+static void on_flip(GtkButton *button, gpointer data)
+{
+    Editor *ed = data;
+    LxpScheme s;
+
+    read_form(ed, &s);
+    lxp_palette_flip(&s);
+    show_scheme_colors(ed, &s);
+    lxp_scheme_clear(&s);
+}
+
+static void on_harmony(GtkButton *button, gpointer data)
+{
+    Editor *ed = data;
+    LxpHarmony harmony = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "lxp-harmony"));
+    LxpColor accent = from_button(ed->accent);
+    LxpColor next = lxp_palette_harmony(&accent, harmony);
+
+    set_button(ed->accent, &next);
+}
+
+static void on_shuffle(GtkButton *button, gpointer data)
+{
+    Editor *ed = data;
+
+    ed->wallpaper_seed = (guint32)g_random_int_range(1, 1000000);
+    schedule_preview(ed);
+}
+
 static void set_wallpaper(Editor *ed, const char *path)
 {
     g_autofree char *base = path ? g_path_get_basename(path) : NULL;
@@ -648,7 +771,8 @@ static void save(GtkButton *button, gpointer data)
     }
 
     if (!lxp_theme_bundle_wallpaper(ed->theme, dir, &error) ||
-        !lxp_scheme_generate(ed->theme, dir, &error) ||
+        !lxp_theme_generate(ed->theme, dir, LXP_WALLPAPER_WIDTH, LXP_WALLPAPER_HEIGHT,
+                            &error) ||
         !lxp_theme_save(ed->theme, dir, &error)) {
         show_error(ed, error->message);
         return;
@@ -796,6 +920,29 @@ static void build_colors_page(Editor *ed, GtkWidget *box)
         gtk_flow_box_append(GTK_FLOW_BOX(preset_box), b);
     }
     gtk_box_append(GTK_BOX(box), preset_box);
+    {
+        GtkWidget *tools = gtk_flow_box_new();
+        struct { const char *label, *tip; GCallback cb; int harmony; } items[] = {
+            { "From wallpaper", "Colors taken from the wallpaper image", G_CALLBACK(on_from_wallpaper), -1 },
+            { "Light ⇄ Dark", "Turn a dark scheme light and back, keeping its hues", G_CALLBACK(on_flip), -1 },
+            { "Opposite accent", "Accent with the complementary hue", G_CALLBACK(on_harmony), LXP_HARMONY_COMPLEMENTARY },
+            { "Nearby accent", "Accent with a neighbouring hue", G_CALLBACK(on_harmony), LXP_HARMONY_ANALOGOUS },
+        };
+
+        gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(tools), GTK_SELECTION_NONE);
+        gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(tools), 2);
+        for (gsize i = 0; i < G_N_ELEMENTS(items); i++) {
+            GtkWidget *b = gtk_button_new_with_label(items[i].label);
+            gtk_widget_set_tooltip_text(b, items[i].tip);
+            if (items[i].harmony >= 0)
+                g_object_set_data(G_OBJECT(b), "lxp-harmony", GINT_TO_POINTER(items[i].harmony));
+            g_signal_connect(b, "clicked", items[i].cb, ed);
+            gtk_flow_box_append(GTK_FLOW_BOX(tools), b);
+            if (i == 0)
+                ed->from_wallpaper = b;
+        }
+        gtk_box_append(GTK_BOX(box), tools);
+    }
 
     gtk_box_append(GTK_BOX(box), section("Colors"));
     ed->background = color_button(ed);
@@ -844,6 +991,20 @@ static void build_appearance_page(Editor *ed, GtkWidget *box)
     attach_row(windows, 3, "Border when maximized", ed->keep_border, NULL);
     ed->animate_iconify = toggle(ed, "Animate windows when they are minimized");
     attach_row(windows, 4, "Minimize animation", ed->animate_iconify, NULL);
+    ed->buttons = gtk_drop_down_new_from_strings(button_sets);
+    gtk_widget_set_tooltip_text(ed->buttons, "Generated window theme only");
+    g_signal_connect(ed->buttons, "notify::selected", G_CALLBACK(on_changed), ed);
+    attach_row(windows, 5, "Buttons", ed->buttons, NULL);
+    ed->title_style = gtk_drop_down_new_from_strings(title_styles);
+    g_signal_connect(ed->title_style, "notify::selected", G_CALLBACK(on_changed), ed);
+    attach_row(windows, 6, "Title bar", ed->title_style, NULL);
+    ed->title_padding = spin(ed, 1, 16, 1, "Space above and below the title");
+    attach_row(windows, 7, "Title height", ed->title_padding, NULL);
+    ed->title_align = gtk_drop_down_new_from_strings(title_aligns);
+    g_signal_connect(ed->title_align, "notify::selected", G_CALLBACK(on_changed), ed);
+    attach_row(windows, 8, "Title alignment", ed->title_align, NULL);
+    ed->border_width = spin(ed, 0, 4, 1, NULL);
+    attach_row(windows, 9, "Border", ed->border_width, NULL);
     gtk_box_append(GTK_BOX(box), windows);
 
     gtk_box_append(GTK_BOX(box), section("Applications"));
@@ -904,7 +1065,15 @@ static void build_desktop_page(Editor *ed, GtkWidget *box)
     GtkWidget *wallpaper_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *choose = gtk_button_new_with_label("Choose…");
 
+    ed->wallpaper_choose = choose;
+
     gtk_box_append(GTK_BOX(box), section("Wallpaper"));
+    ed->wallpaper_source = gtk_drop_down_new_from_strings(wallpaper_sources);
+    g_signal_connect(ed->wallpaper_source, "notify::selected", G_CALLBACK(on_changed), ed);
+    ed->wallpaper_shuffle = gtk_button_new_from_icon_name("view-refresh-symbolic");
+    gtk_widget_set_tooltip_text(ed->wallpaper_shuffle, "New variation");
+    g_signal_connect(ed->wallpaper_shuffle, "clicked", G_CALLBACK(on_shuffle), ed);
+    attach_row(wallpaper, 2, "Source", ed->wallpaper_source, ed->wallpaper_shuffle);
     ed->wallpaper_label = gtk_label_new("None");
     gtk_label_set_ellipsize(GTK_LABEL(ed->wallpaper_label), PANGO_ELLIPSIZE_MIDDLE);
     gtk_label_set_max_width_chars(GTK_LABEL(ed->wallpaper_label), 18);
@@ -974,6 +1143,15 @@ static void build_effects_page(Editor *ed, GtkWidget *box)
     attach_row(grid, 6, "Inactive windows (%)", ed->inactive_opacity, NULL);
     ed->fading = toggle(ed, "Fade windows in and out");
     attach_row(grid, 7, "Fading", ed->fading, NULL);
+    ed->blur = toggle(ed, "Blur what is behind translucent windows and panels");
+    attach_row(grid, 8, "Blur", ed->blur, NULL);
+    ed->blur_strength = spin(ed, 1, 20, 1, NULL);
+    attach_row(grid, 9, "Blur strength", ed->blur_strength, NULL);
+    ed->animations = gtk_drop_down_new_from_strings(animation_labels);
+    gtk_widget_set_tooltip_text(ed->animations, "Window open, close and resize animations "
+                                                "(picom 12 or newer)");
+    g_signal_connect(ed->animations, "notify::selected", G_CALLBACK(on_changed), ed);
+    attach_row(grid, 10, "Animations", ed->animations, NULL);
     gtk_box_append(GTK_BOX(box), grid);
 
     gtk_label_set_wrap(GTK_LABEL(note), TRUE);
@@ -1015,6 +1193,7 @@ static void load_form(Editor *ed)
     g_autofree char *mode = lxp_theme_get_string(t, "Wallpaper", "mode");
     g_autofree char *position = lxp_theme_get_string(t, "Panel", "position");
     g_autofree char *fading = lxp_theme_get_string(t, "Compositor", "fading");
+    g_autofree char *animations = lxp_theme_get_string(t, "Compositor", "animations");
     g_autofree char *lines = lxp_theme_get_string(t, "Panel", "lineCount");
     g_autofree char *kvantum = lxp_theme_get_string(t, "Kvantum", "theme");
     g_autofree char *author = lxp_theme_get_string(t, LXP_THEME_GROUP, "Author");
@@ -1092,6 +1271,20 @@ static void load_form(Editor *ed)
         set_optional_font(&ed->title_font, s.title_font ? s.title_font : current, text_font);
         set_optional_font(&ed->gtk_font, s.gtk_font, text_font);
     }
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->title_style),
+                               g_strcmp0(s.title_style, "gradient") == 0 ? 1 : 0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->title_padding),
+                              s.title_padding > 0 ? s.title_padding : 4);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->border_width),
+                              s.has_border_width ? s.border_width : 1);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->title_align),
+                               string_index(title_align_values, s.title_align ? s.title_align : "center"));
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->buttons),
+                               string_index(button_set_values, s.buttons ? s.buttons : "classic"));
+    ed->wallpaper_seed = s.wallpaper_seed ? s.wallpaper_seed : (guint32)g_random_int_range(1, 1000000);
+    if (lxp_wallgen_is_style(s.wallpaper))
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->wallpaper_source),
+                                   1 + string_index(lxp_wallgen_styles, s.wallpaper));
     gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->dark_mode),
         !s.prefer_dark ? 0 : g_str_equal(s.prefer_dark, "true") ? 2 : 1);
     choice_set(&ed->gtk_icons, gtk_icons && g_strcmp0(gtk_icons, icons) != 0 ? gtk_icons : NULL);
@@ -1105,7 +1298,9 @@ static void load_form(Editor *ed)
                           g_ascii_strcasecmp(follow, "false") != 0);
     lxp_scheme_clear(&s);
 
-    set_wallpaper(ed, model->wallpaper);
+    /* a generated wallpaper is not an image to keep */
+    set_wallpaper(ed, gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->wallpaper_source)) == 0
+                      ? model->wallpaper : NULL);
     gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->wallpaper_mode),
                                string_index(wallpaper_modes, mode ? mode : "zoom"));
     gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->panel_position),
@@ -1127,6 +1322,10 @@ static void load_form(Editor *ed)
     gtk_switch_set_active(GTK_SWITCH(ed->shadows), model->shadow);
     gtk_range_set_value(GTK_RANGE(ed->shadow_strength), round(model->shadow_opacity * 100));
     gtk_switch_set_active(GTK_SWITCH(ed->fading), fading && g_str_equal(fading, "true"));
+    gtk_switch_set_active(GTK_SWITCH(ed->blur), model->blur);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->blur_strength), model->blur_strength);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->animations),
+                               animations ? string_index(animation_values, animations) : 0);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->shadow_radius), model->shadow_radius);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->shadow_offset_x), model->shadow_offset_x);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->shadow_offset_y), model->shadow_offset_y);

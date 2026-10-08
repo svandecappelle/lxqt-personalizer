@@ -131,15 +131,28 @@ static gboolean find_setting(const char *s, gsize len, const char *name, Span *s
 
                 while (v < len && (s[v] == ' ' || s[v] == '\t'))
                     v++;
-                /* scalar value: up to the terminator, comment or end of line */
+                /*
+                 * The value runs to the terminator, comment or end of line
+                 * at its own nesting level, so lists and groups such as
+                 * "animations = ( {...}, {...} );" are taken whole.
+                 */
                 end = v;
-                while (end < len && s[end] != ';' && s[end] != ',' && s[end] != '\n' &&
-                       s[end] != '#' && !(s[end] == '/' && end + 1 < len &&
-                                          (s[end + 1] == '/' || s[end + 1] == '*'))) {
-                    if (s[end] == '"')
+                for (int vdepth = 0; end < len;) {
+                    if (vdepth == 0 && (s[end] == ';' || s[end] == ',' || s[end] == '\n'))
+                        break;
+                    if (s[end] == '"' || s[end] == '#' ||
+                        (s[end] == '/' && end + 1 < len &&
+                         (s[end + 1] == '/' || s[end + 1] == '*'))) {
+                        if (vdepth == 0 && s[end] != '"')
+                            break;  /* trailing comment */
                         end = skip_comment_or_string(s, end, len);
-                    else
-                        end++;
+                        continue;
+                    }
+                    if (s[end] == '(' || s[end] == '[' || s[end] == '{')
+                        vdepth++;
+                    else if (s[end] == ')' || s[end] == ']' || s[end] == '}')
+                        vdepth = MAX(0, vdepth - 1);
+                    end++;
                 }
                 while (end > v && (s[end - 1] == ' ' || s[end - 1] == '\t'))
                     end--;
@@ -165,13 +178,26 @@ char *lxp_libconfig_get(const LxpLibconfig *conf, const char *name)
     return g_strndup(conf->text->str + span.value_start, span.value_end - span.value_start);
 }
 
+static void set_text(LxpLibconfig *conf, const char *name, const char *clean);
+
 void lxp_libconfig_set(LxpLibconfig *conf, const char *name, const char *value)
 {
-    Span span;
     g_autofree char *clean = g_strdup(value);
 
     /* one scalar on one line: nothing that could start another statement */
     g_strdelimit(clean, "\n\r;#{}[]()", ' ');
+    set_text(conf, name, clean);
+}
+
+void lxp_libconfig_set_raw(LxpLibconfig *conf, const char *name, const char *value)
+{
+    set_text(conf, name, value);
+}
+
+static void set_text(LxpLibconfig *conf, const char *name, const char *clean)
+{
+    Span span;
+
     if (find_setting(conf->text->str, conf->text->len, name, &span)) {
         g_string_erase(conf->text, (gssize)span.value_start,
                        (gssize)(span.value_end - span.value_start));

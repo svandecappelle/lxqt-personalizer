@@ -11,7 +11,7 @@
  *   shadow-exclude = [ "window_type = 'dock'" ];
  *
  * Only top-level "name = value;" (or "name: value") settings are read or
- * written; values inside groups and lists are never touched.
+ * written, whole; values inside groups and lists are never edited.
  */
 
 typedef struct _LxpLibconfig LxpLibconfig;
@@ -26,5 +26,7 @@ const char   *lxp_libconfig_to_data(const LxpLibconfig *conf);
 char         *lxp_libconfig_get(const LxpLibconfig *conf, const char *name);
 /* Replace the value in place, or append "name = value;". */
 void          lxp_libconfig_set(LxpLibconfig *conf, const char *name, const char *value);
+/* Same for a structured value (list, group) built by the caller: no sanitizing. */
+void          lxp_libconfig_set_raw(LxpLibconfig *conf, const char *name, const char *value);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(LxpLibconfig, lxp_libconfig_free)

@@ -21,6 +21,14 @@
  *   gtk_font=Cantarell 11  optional font of GTK applications (else font)
  *   prefer_dark=true       optional dark GTK variant (else from the colors)
  *   link=#5e81ac           optional link color (else derived from accent)
+ *   wallpaper=blobs        optional generated wallpaper style (gradient,
+ *                          blobs, waves, geometric) and wallpaper_seed=N
+ *   title_style=gradient   window title bars: flat (default) or gradient
+ *   title_padding=6        space above and below the title (title height)
+ *   border_width=1         window border, 0-4
+ *   title_align=center     left, center or right
+ *   buttons=dots           classic (Openbox's own), minimal (thin lines,
+ *                          red close on hover) or dots (colored circles)
  *   style=kvantum          optional Qt widget style (default Fusion, which
  *                          follows the palette everywhere)
  *   generate=openbox;gtk;lxqt
@@ -39,6 +47,14 @@ typedef struct {
     char    *title_font;
     char    *gtk_font;
     char    *prefer_dark;    /* "true", "false" or NULL (automatic) */
+    char    *title_style;    /* "flat" or "gradient"; NULL: flat */
+    int      title_padding;  /* 0: default */
+    int      border_width;
+    gboolean has_border_width;  /* else the default, 1 */
+    char    *title_align;    /* NULL: center */
+    char    *buttons;        /* NULL: classic */
+    char    *wallpaper;      /* generated wallpaper style, or NULL */
+    guint32  wallpaper_seed;
     char    *style;
     /* use the installed theme named in the theme instead of generating */
     gboolean keep_openbox, keep_gtk, keep_lxqt;

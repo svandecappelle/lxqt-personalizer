@@ -55,3 +55,36 @@ GPtrArray *lxp_paths_find_config_layers(const char *relpath)
     }
     return found;
 }
+
+static void add_dir(GPtrArray *dirs, char *dir)
+{
+    g_autofree char *canonical = g_canonicalize_filename(dir, NULL);
+    g_autofree char *user = lxp_paths_themes_dir();
+    g_autofree char *user_canonical = g_canonicalize_filename(user, NULL);
+
+    g_free(dir);
+    /* $XDG_DATA_DIRS may list ~/.local/share: the user's themes are not built in */
+    if (g_str_equal(canonical, user_canonical) ||
+        !g_file_test(canonical, G_FILE_TEST_IS_DIR) ||
+        g_ptr_array_find_with_equal_func(dirs, canonical, g_str_equal, NULL))
+        return;
+    g_ptr_array_add(dirs, g_steal_pointer(&canonical));
+}
+
+GPtrArray *lxp_paths_builtin_dirs(void)
+{
+    GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
+    const char *env = g_getenv("LXP_BUILTIN_DIR");
+
+    if (env && *env)
+        add_dir(dirs, g_strdup(env));
+    for (const char *const *d = g_get_system_data_dirs(); *d; d++)
+        add_dir(dirs, g_build_filename(*d, LXP_APP_ID, "themes", NULL));
+    add_dir(dirs, g_build_filename(LXP_INSTALL_DATADIR, LXP_APP_ID, "themes", NULL));
+    return dirs;
+}
+
+char *lxp_paths_builtin_cache_dir(void)
+{
+    return g_build_filename(g_get_user_cache_dir(), LXP_APP_ID, "builtin", NULL);
+}

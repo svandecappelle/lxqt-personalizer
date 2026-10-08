@@ -11,6 +11,7 @@
 #include "lxp-preview-area.h"
 #include "lxp-runner.h"
 #include "lxp-snapshot.h"
+#include "lxp-themegen.h"
 
 #include <stdlib.h>
 
@@ -18,7 +19,9 @@
 
 /* A gallery entry: an installed theme, or the current desktop (dir NULL). */
 typedef struct {
-    char *dir;
+    char *dir;          /* where to use it from (a generated copy for built-ins) */
+    char *source;       /* built-ins: the read-only original */
+    gboolean builtin;
     LxpTheme *theme;
 } Entry;
 
@@ -63,6 +66,7 @@ G_DEFINE_FINAL_TYPE(LxpWindow, lxp_window, GTK_TYPE_APPLICATION_WINDOW)
 static void entry_free(Entry *e)
 {
     g_free(e->dir);
+    g_free(e->source);
     lxp_theme_free(e->theme);
     g_free(e);
 }
@@ -184,7 +188,12 @@ static void update_details(LxpWindow *win)
     }
 
     gtk_label_set_text(GTK_LABEL(win->title), lxp_theme_get_name(e->theme));
-    if (e->dir) {
+    if (e->builtin) {
+        g_autofree char *comment = lxp_theme_get_string(e->theme, LXP_THEME_GROUP, "Comment");
+        g_autofree char *sub = g_strdup_printf("Built-in theme%s%s", comment ? " — " : "",
+                                               comment ? comment : "");
+        gtk_label_set_text(GTK_LABEL(win->subtitle), sub);
+    } else if (e->dir) {
         g_autofree char *author = lxp_theme_get_string(e->theme, LXP_THEME_GROUP, "Author");
         g_autofree char *sub = author ? g_strdup_printf("by %s — %s", author, e->dir)
                                       : g_strdup(e->dir);
@@ -231,7 +240,9 @@ static void update_details(LxpWindow *win)
     gtk_widget_set_visible(win->parts_button, e->dir != NULL);
     gtk_widget_set_sensitive(win->parts_button, idle);
     gtk_widget_set_visible(win->try_button, e->dir != NULL);
-    gtk_widget_set_visible(win->delete_button, e->dir != NULL);
+    gtk_widget_set_visible(win->delete_button, e->dir != NULL && !e->builtin);
+    gtk_button_set_label(GTK_BUTTON(win->edit_button),
+                         e->builtin ? "_Duplicate & Edit…" : "_Edit…");
     gtk_widget_set_visible(win->edit_button, e->dir != NULL);
     gtk_widget_set_visible(win->export_button, e->dir != NULL);
     gtk_widget_set_visible(win->save_button, e->dir == NULL);
@@ -255,6 +266,12 @@ static GtkWidget *make_card(Entry *e)
         gtk_widget_add_css_class(label, "heading");
     gtk_box_append(GTK_BOX(box), area);
     gtk_box_append(GTK_BOX(box), label);
+    if (e->builtin) {
+        GtkWidget *caption = gtk_label_new("Built-in");
+        gtk_widget_add_css_class(caption, "dim-label");
+        gtk_widget_add_css_class(caption, "caption");
+        gtk_box_append(GTK_BOX(box), caption);
+    }
     gtk_widget_add_css_class(box, "theme-card");
     return box;
 }
@@ -292,6 +309,30 @@ static void reload_gallery(LxpWindow *win, const char *select_dir)
         g_ptr_array_add(win->entries, e);
     }
 
+    /* built-ins, used from a copy generated on first use */
+    {
+        g_autoptr(GPtrArray) builtin = lxp_theme_list_builtin();
+
+        for (guint i = 0; i < builtin->len; i++) {
+            g_autoptr(GError) error = NULL;
+            g_autofree char *dir = lxp_theme_materialize(builtin->pdata[i], &error);
+            LxpTheme *theme = dir ? lxp_theme_load(dir, &error) : NULL;
+            Entry *e;
+
+            if (!theme) {
+                g_warning("Skipping built-in theme %s: %s", (char *)builtin->pdata[i],
+                          error ? error->message : "not found");
+                continue;
+            }
+            e = g_new0(Entry, 1);
+            e->dir = g_steal_pointer(&dir);
+            e->source = g_strdup(builtin->pdata[i]);
+            e->builtin = TRUE;
+            e->theme = theme;
+            g_ptr_array_add(win->entries, e);
+        }
+    }
+
     for (guint i = 0; i < win->entries->len; i++) {
         Entry *e = g_ptr_array_index(win->entries, i);
         GtkWidget *card = make_card(e);
@@ -300,7 +341,7 @@ static void reload_gallery(LxpWindow *win, const char *select_dir)
         gtk_flow_box_append(GTK_FLOW_BOX(win->gallery), card);
         child = GTK_FLOW_BOX_CHILD(gtk_widget_get_parent(card));
         g_object_set_data(G_OBJECT(child), "lxp-entry", e);
-        if (g_strcmp0(e->dir, keep) == 0)
+        if (g_strcmp0(e->dir, keep) == 0 || (e->source && g_strcmp0(e->source, keep) == 0))
             to_select = child;
     }
     if (to_select)
@@ -788,12 +829,58 @@ static void new_theme_activated(GtkWidget *widget, const char *action, GVariant 
     lxp_editor_open(GTK_WINDOW(widget), NULL, on_editor_saved, widget);
 }
 
+/*
+ * Copy built-in <source> into the user's themes as "<Name> copy" (made
+ * unique), so it can be edited. Returns the new directory.
+ */
+static char *duplicate_builtin(const char *source, GError **error)
+{
+    g_autoptr(LxpTheme) theme = lxp_theme_load(source, error);
+    g_autofree char *themes = lxp_paths_themes_dir();
+    g_autofree char *name = NULL;
+    g_autofree char *dir = NULL;
+
+    if (!theme)
+        return NULL;
+    for (int n = 1; n < 100; n++) {
+        g_autofree char *slug = NULL;
+        g_autofree char *manifest = NULL;
+
+        g_free(name);
+        name = n == 1 ? g_strdup_printf("%s copy", lxp_theme_get_name(theme))
+                      : g_strdup_printf("%s copy %d", lxp_theme_get_name(theme), n);
+        slug = lxp_theme_slugify(name);
+        g_free(dir);
+        dir = g_build_filename(themes, slug, NULL);
+        manifest = g_build_filename(dir, LXP_THEME_MANIFEST, NULL);
+        if (!g_file_test(manifest, G_FILE_TEST_EXISTS))
+            break;
+    }
+    lxp_theme_set_string(theme, LXP_THEME_GROUP, "Name", name);
+    lxp_theme_set_string(theme, LXP_THEME_GROUP, "Author", NULL);
+    if (!lxp_copy_tree(source, dir, error) || !lxp_theme_save(theme, dir, error))
+        return NULL;
+    return g_steal_pointer(&dir);
+}
+
 static void on_edit(GtkButton *button, gpointer user)
 {
     LxpWindow *win = user;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *copy = NULL;
 
-    if (win->selected && win->selected->dir)
+    if (!win->selected || !win->selected->dir)
+        return;
+    if (!win->selected->builtin) {
         lxp_editor_open(GTK_WINDOW(win), win->selected->dir, on_editor_saved, win);
+        return;
+    }
+    if (!(copy = duplicate_builtin(win->selected->source, &error))) {
+        show_banner(win, error->message, TRUE);
+        return;
+    }
+    reload_gallery(win, copy);
+    lxp_editor_open(GTK_WINDOW(win), copy, on_editor_saved, win);
 }
 
 /* --- import / export ---------------------------------------------------- */
@@ -1051,7 +1138,7 @@ static GtkWidget *build_details(LxpWindow *win)
     win->delete_button = gtk_button_new_with_mnemonic("_Delete");
     gtk_widget_add_css_class(win->delete_button, "destructive-action");
     g_signal_connect(win->delete_button, "clicked", G_CALLBACK(on_delete), win);
-    win->edit_button = gtk_button_new_with_mnemonic("_Edit Colors…");
+    win->edit_button = gtk_button_new_with_mnemonic("_Edit…");
     g_signal_connect(win->edit_button, "clicked", G_CALLBACK(on_edit), win);
     win->export_button = gtk_button_new_with_mnemonic("E_xport…");
     gtk_widget_set_tooltip_text(win->export_button, "Save as a .tar.gz pack to share");

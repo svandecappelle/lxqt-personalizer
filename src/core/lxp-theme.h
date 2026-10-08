@@ -57,11 +57,17 @@ char       *lxp_theme_slugify(const char *name);
 
 /*
  * Resolve <name_or_path>: an existing directory containing theme.ini, or
- * the slug of a theme in the user themes directory.
+ * the slug of a theme in the user themes directory, else of a built-in.
  */
 char       *lxp_theme_resolve(const char *name_or_path, GError **error);
 
 /* Sorted directory names of installed themes. */
 GPtrArray  *lxp_theme_list_installed(void);
+
+/* Directories of built-in themes, sorted by name. */
+GPtrArray  *lxp_theme_list_builtin(void);
+
+/* Is <dir> a built-in theme (read-only, shipped with the program)? */
+gboolean    lxp_theme_is_builtin(const char *dir);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(LxpTheme, lxp_theme_free)

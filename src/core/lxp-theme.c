@@ -218,6 +218,15 @@ char *lxp_theme_resolve(const char *name_or_path, GError **error)
 
         if (is_theme_dir(dir))
             return g_steal_pointer(&dir);
+
+        {
+            g_autoptr(GPtrArray) builtin = lxp_paths_builtin_dirs();
+            for (guint i = 0; i < builtin->len; i++) {
+                g_autofree char *candidate = g_build_filename(builtin->pdata[i], slug, NULL);
+                if (is_theme_dir(candidate))
+                    return g_steal_pointer(&candidate);
+            }
+        }
     }
 
     g_set_error(error, LXP_ERROR, LXP_ERROR_NOT_FOUND,
@@ -241,4 +250,41 @@ GPtrArray *lxp_theme_list_installed(void)
     }
     g_ptr_array_sort_values(names, (GCompareFunc)g_strcmp0);
     return names;
+}
+
+GPtrArray *lxp_theme_list_builtin(void)
+{
+    g_autoptr(GPtrArray) roots = lxp_paths_builtin_dirs();
+    g_autoptr(GHashTable) seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
+
+    for (guint i = 0; i < roots->len; i++) {
+        g_autoptr(GDir) dir = g_dir_open(roots->pdata[i], 0, NULL);
+        const char *name;
+
+        while (dir && (name = g_dir_read_name(dir))) {
+            g_autofree char *path = g_build_filename(roots->pdata[i], name, NULL);
+
+            /* the first directory providing a name wins */
+            if (!is_theme_dir(path) || g_hash_table_contains(seen, name))
+                continue;
+            g_hash_table_add(seen, g_strdup(name));
+            g_ptr_array_add(dirs, g_steal_pointer(&path));
+        }
+    }
+    g_ptr_array_sort_values(dirs, (GCompareFunc)g_strcmp0);
+    return dirs;
+}
+
+gboolean lxp_theme_is_builtin(const char *dir)
+{
+    g_autoptr(GPtrArray) roots = lxp_paths_builtin_dirs();
+    g_autofree char *canonical = g_canonicalize_filename(dir, NULL);
+
+    for (guint i = 0; i < roots->len; i++) {
+        const char *root = roots->pdata[i];
+        if (g_str_has_prefix(canonical, root) && canonical[strlen(root)] == G_DIR_SEPARATOR)
+            return TRUE;
+    }
+    return FALSE;
 }

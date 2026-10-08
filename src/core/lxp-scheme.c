@@ -5,8 +5,10 @@
 #include "lxp-fileutil.h"
 #include "lxp-recolor.h"
 #include "lxp-template.h"
+#include "lxp-xbm.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define ASSET_MARKER ".lxp-asset"
@@ -46,6 +48,21 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
     s->title_font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_font");
     s->gtk_font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "gtk_font");
     s->prefer_dark = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "prefer_dark");
+    s->title_style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_style");
+    s->title_align = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_align");
+    s->buttons = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "buttons");
+    {
+        g_autofree char *padding = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_padding");
+        g_autofree char *border = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "border_width");
+        s->title_padding = padding ? CLAMP(atoi(padding), 1, 16) : 0;
+        s->has_border_width = border != NULL;
+        s->border_width = border ? CLAMP(atoi(border), 0, 4) : 1;
+    }
+    s->wallpaper = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "wallpaper");
+    {
+        g_autofree char *seed = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "wallpaper_seed");
+        s->wallpaper_seed = seed ? (guint32)g_ascii_strtoull(seed, NULL, 10) : 1;
+    }
     s->style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "style");
     {
         g_auto(GStrv) parts = lxp_theme_get_string_list(theme, LXP_SCHEME_GROUP, "generate");
@@ -81,6 +98,28 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
                          s->gtk_font && *s->gtk_font ? s->gtk_font : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "prefer_dark",
                          s->prefer_dark && *s->prefer_dark ? s->prefer_dark : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_style",
+                         s->title_style && *s->title_style ? s->title_style : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_align",
+                         s->title_align && *s->title_align ? s->title_align : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "buttons",
+                         s->buttons && *s->buttons ? s->buttons : NULL);
+    {
+        g_autofree char *padding = s->title_padding > 0
+            ? g_strdup_printf("%d", s->title_padding) : NULL;
+        g_autofree char *border = s->has_border_width
+            ? g_strdup_printf("%d", s->border_width) : NULL;
+        lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_padding", padding);
+        lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "border_width", border);
+    }
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "wallpaper",
+                         s->wallpaper && *s->wallpaper ? s->wallpaper : NULL);
+    if (s->wallpaper && *s->wallpaper) {
+        g_autofree char *seed = g_strdup_printf("%u", s->wallpaper_seed);
+        lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "wallpaper_seed", seed);
+    } else {
+        lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "wallpaper_seed", NULL);
+    }
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "style",
                          s->style && *s->style ? s->style : NULL);
 
@@ -128,6 +167,10 @@ void lxp_scheme_clear(LxpScheme *s)
     g_clear_pointer(&s->title_font, g_free);
     g_clear_pointer(&s->gtk_font, g_free);
     g_clear_pointer(&s->prefer_dark, g_free);
+    g_clear_pointer(&s->wallpaper, g_free);
+    g_clear_pointer(&s->title_style, g_free);
+    g_clear_pointer(&s->title_align, g_free);
+    g_clear_pointer(&s->buttons, g_free);
     g_clear_pointer(&s->style, g_free);
 }
 
@@ -228,6 +271,138 @@ static GHashTable *template_vars(const char *name, const LxpSchemeColors *c)
     add_color(vars, "panel_fg", &c->panel_fg);
     add_color(vars, "panel_hover", &c->panel_hover);
     return vars;
+}
+
+static void add_text(GHashTable *vars, const char *name, const char *value)
+{
+    g_hash_table_insert(vars, g_strdup(name), g_strdup(value));
+}
+
+static void add_int(GHashTable *vars, const char *name, int value)
+{
+    g_hash_table_insert(vars, g_strdup(name), g_strdup_printf("%d", value));
+}
+
+/* Per-button themerc rules for the generated button sets. */
+static char *button_rules(const LxpScheme *s, const LxpSchemeColors *c)
+{
+    GString *r = g_string_new(NULL);
+
+    if (g_strcmp0(s->buttons, "dots") == 0) {
+        /* close, minimize, maximize as red, yellow and green dots */
+        static const struct { const char *button, *normal, *hover, *pressed; } dots[] = {
+            { "close",   "#ff5f57", "#ff7b75", "#e0443e" },
+            { "iconify", "#febc2e", "#ffd062", "#dea123" },
+            { "max",     "#28c840", "#4cd964", "#1aab29" },
+        };
+        LxpColor idle = lxp_color_mix(&c->title_inactive, &c->title_inactive_fg, 0.35);
+        g_autofree char *idle_hex = lxp_color_to_hex(&idle);
+        g_autofree char *other = lxp_color_to_hex(&c->title_active_fg);
+
+        for (gsize i = 0; i < G_N_ELEMENTS(dots); i++) {
+            g_string_append_printf(r, "window.active.button.%s.unpressed.image.color: %s\n"
+                                      "window.active.button.%s.hover.image.color: %s\n"
+                                      "window.active.button.%s.pressed.image.color: %s\n",
+                                   dots[i].button, dots[i].normal, dots[i].button,
+                                   dots[i].hover, dots[i].button, dots[i].pressed);
+        }
+        g_string_append_printf(r, "window.active.button.max.toggled.unpressed.image.color: %s\n"
+                                  "window.active.button.max.toggled.hover.image.color: %s\n"
+                                  "window.active.button.unpressed.image.color: %s\n"
+                                  "window.inactive.button.unpressed.image.color: %s\n"
+                                  "window.inactive.button.hover.image.color: %s\n",
+                               dots[2].normal, dots[2].hover, other, idle_hex, idle_hex);
+    } else if (g_strcmp0(s->buttons, "minimal") == 0) {
+        /* quiet glyphs, a soft square on hover, red behind close */
+        LxpColor hover = lxp_color_mix(&c->title_active, &c->title_active_fg, 0.12);
+        LxpColor pressed = lxp_color_mix(&c->title_active, &c->title_active_fg, 0.22);
+        g_autofree char *hover_hex = lxp_color_to_hex(&hover);
+        g_autofree char *pressed_hex = lxp_color_to_hex(&pressed);
+        g_autofree char *fg = lxp_color_to_hex(&c->title_active_fg);
+
+        g_string_append_printf(r,
+            "window.active.button.hover.bg: Flat Solid\n"
+            "window.active.button.hover.bg.color: %s\n"
+            "window.active.button.hover.image.color: %s\n"
+            "window.active.button.pressed.bg: Flat Solid\n"
+            "window.active.button.pressed.bg.color: %s\n"
+            "window.active.button.pressed.image.color: %s\n"
+            "window.active.button.close.hover.bg: Flat Solid\n"
+            "window.active.button.close.hover.bg.color: #c42b1c\n"
+            "window.active.button.close.hover.image.color: #ffffff\n"
+            "window.active.button.close.pressed.bg: Flat Solid\n"
+            "window.active.button.close.pressed.bg.color: #b02717\n"
+            "window.active.button.close.pressed.image.color: #ffffff\n",
+            hover_hex, fg, pressed_hex, fg);
+    }
+    return g_string_free(r, FALSE);
+}
+
+static void add_window_style(GHashTable *vars, const LxpScheme *s, const LxpSchemeColors *c)
+{
+    gboolean gradient = g_strcmp0(s->title_style, "gradient") == 0;
+    LxpColor shade = { 0, 0, 0, 1 };
+    LxpColor active_to = lxp_color_mix(&c->title_active, &shade, c->dark ? 0.18 : 0.08);
+    LxpColor inactive_to = lxp_color_mix(&c->title_inactive, &shade, c->dark ? 0.12 : 0.05);
+    int padding = s->title_padding > 0 ? s->title_padding : 4;
+    const char *align = s->title_align;
+
+    if (g_strcmp0(align, "left") != 0 && g_strcmp0(align, "right") != 0)
+        align = "center";
+    add_int(vars, "border_width", s->has_border_width ? s->border_width : 1);
+    add_int(vars, "padding_height", padding);
+    add_int(vars, "padding_width", MAX(6, padding + 2));
+    add_text(vars, "title_texture", gradient ? "Flat Gradient Vertical" : "Flat Solid");
+    add_color(vars, "title_active_to", gradient ? &active_to : &c->title_active);
+    add_color(vars, "title_inactive_to", gradient ? &inactive_to : &c->title_inactive);
+    add_text(vars, "title_align", align);
+    g_hash_table_insert(vars, g_strdup("button_rules"), button_rules(s, c));
+}
+
+/* openbox-3/<name>.xbm button bitmaps for the "minimal" and "dots" sets. */
+static gboolean write_buttons(const char *dir, const char *set, GError **error)
+{
+    static const char *const names[] = {
+        "close", "max", "max_toggled", "iconify", "desk", "desk_toggled",
+        "shade", "shade_toggled",
+    };
+    gboolean dots = g_strcmp0(set, "dots") == 0;
+    int size = dots ? 12 : 10;
+
+    if (!dots && g_strcmp0(set, "minimal") != 0)
+        return TRUE;  /* classic: Openbox's own buttons */
+
+    for (gsize i = 0; i < G_N_ELEMENTS(names); i++) {
+        g_autoptr(LxpXbm) xbm = lxp_xbm_new(size, size);
+        g_autofree char *file = g_strconcat(names[i], ".xbm", NULL);
+        g_autofree char *path = g_build_filename(dir, "openbox-3", file, NULL);
+        g_autofree char *text = NULL;
+        const char *n = names[i];
+
+        if (dots) {
+            lxp_xbm_fill_circle(xbm, size / 2.0, size / 2.0, size / 2.0);
+        } else if (g_str_equal(n, "close")) {
+            lxp_xbm_line(xbm, 1.5, 1.5, 8.5, 8.5, 1.3);
+            lxp_xbm_line(xbm, 8.5, 1.5, 1.5, 8.5, 1.3);
+        } else if (g_str_equal(n, "max")) {
+            lxp_xbm_rect(xbm, 1, 1, 8, 8, 1);
+        } else if (g_str_equal(n, "max_toggled")) {
+            lxp_xbm_rect(xbm, 3, 0, 7, 7, 1);
+            lxp_xbm_rect(xbm, 0, 3, 7, 7, 1);
+        } else if (g_str_equal(n, "iconify")) {
+            lxp_xbm_line(xbm, 1, 5.5, 9, 5.5, 1.1);
+        } else if (g_str_has_prefix(n, "desk")) {
+            lxp_xbm_fill_circle(xbm, 5, 5, g_str_has_suffix(n, "toggled") ? 3.2 : 2);
+        } else {  /* shade */
+            lxp_xbm_line(xbm, 1, 2.5, 9, 2.5, 1.1);
+            if (g_str_has_suffix(n, "toggled"))
+                lxp_xbm_line(xbm, 1, 7.5, 9, 7.5, 1.1);
+        }
+        text = lxp_xbm_to_text(xbm, n);
+        if (!lxp_write_atomic(path, text, -1, 0644, error))
+            return FALSE;
+    }
+    return TRUE;
 }
 
 static gboolean write_template(const char *tmpl, GHashTable *vars, const char *dir,
@@ -506,6 +681,7 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
     lxp_scheme_derive(&s, &c);
     name = lxp_scheme_asset_name(theme);
     vars = template_vars(name, &c);
+    add_window_style(vars, &s, &c);
 
     themes_dir = g_build_filename(dir, "data", "themes", name, NULL);
     lxqt_dir = g_build_filename(dir, "data", "lxqt", "themes", name, NULL);
@@ -519,7 +695,8 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
         ok = write_marker(themes_dir, error) &&
              write_template("index.theme", vars, themes_dir, "index.theme", error);
     if (ok && !s.keep_openbox)
-        ok = write_template("themerc", vars, themes_dir, "openbox-3/themerc", error);
+        ok = write_template("themerc", vars, themes_dir, "openbox-3/themerc", error) &&
+             write_buttons(themes_dir, s.buttons, error);
     if (ok && !s.keep_gtk)
         ok = write_gtk_css(3, name, &c, vars, themes_dir, error) &&
              write_gtk_css(4, name, &c, vars, themes_dir, error);

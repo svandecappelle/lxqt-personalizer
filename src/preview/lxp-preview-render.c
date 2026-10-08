@@ -193,6 +193,36 @@ static void draw_wallpaper(Ctx *ctx)
     cairo_restore(cr);
 }
 
+/*
+ * What picom's blur shows through a translucent area: the wallpaper,
+ * rendered small and scaled back up (stronger blur, smaller copy).
+ */
+static void draw_blurred_wallpaper(Ctx *ctx, Rect area)
+{
+    double factor = 4.0 + ctx->m->blur_strength * 2.0;
+    int w = MAX(1, (int)(VW / factor)), h = MAX(1, (int)(VH / factor));
+    cairo_surface_t *small = cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h);
+    cairo_t *scr = cairo_create(small);
+    Ctx sctx = { scr, ctx->m, 1.0 / factor };
+    cairo_pattern_t *pattern;
+
+    cairo_scale(scr, 1.0 / factor, 1.0 / factor);
+    draw_wallpaper(&sctx);
+    cairo_destroy(scr);
+
+    cairo_save(ctx->cr);
+    cairo_rectangle(ctx->cr, area.x, area.y, area.w, area.h);
+    cairo_clip(ctx->cr);
+    cairo_scale(ctx->cr, factor, factor);
+    cairo_set_source_surface(ctx->cr, small, 0, 0);
+    pattern = cairo_get_source(ctx->cr);
+    cairo_pattern_set_filter(pattern, CAIRO_FILTER_GOOD);
+    cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
+    cairo_paint(ctx->cr);
+    cairo_restore(ctx->cr);
+    cairo_surface_destroy(small);
+}
+
 static void draw_desktop_icons(Ctx *ctx, Rect area)
 {
     const struct { const char *label; const char *const *names; } items[] = {
@@ -214,6 +244,38 @@ static void draw_desktop_icons(Ctx *ctx, Rect area)
 }
 
 /* --- Openbox decorations ------------------------------------------------ */
+
+static int button_index(char kind)
+{
+    switch (kind) {
+    case 'C': return LXP_BUTTON_CLOSE;
+    case 'M': return LXP_BUTTON_MAX;
+    case 'I': return LXP_BUTTON_ICONIFY;
+    case 'S': return LXP_BUTTON_SHADE;
+    case 'D': return LXP_BUTTON_DESK;
+    default:  return -1;
+    }
+}
+
+/* An Openbox button bitmap, at its own pixel size, centered in <b>. */
+static void draw_bitmap(cairo_t *cr, const LxpXbm *xbm, Rect b, const LxpColor *fg)
+{
+    cairo_surface_t *mask = cairo_image_surface_create(CAIRO_FORMAT_A8, xbm->width, xbm->height);
+    int stride = cairo_image_surface_get_stride(mask);
+    guint8 *data;
+
+    cairo_surface_flush(mask);
+    data = cairo_image_surface_get_data(mask);
+    for (int y = 0; y < xbm->height; y++)
+        for (int x = 0; x < xbm->width; x++)
+            data[y * stride + x] = lxp_xbm_get(xbm, x, y) ? 255 : 0;
+    cairo_surface_mark_dirty(mask);
+
+    set_color(cr, fg, 1.0);
+    cairo_mask_surface(cr, mask, round(b.x + (b.w - xbm->width) / 2),
+                       round(b.y + (b.h - xbm->height) / 2));
+    cairo_surface_destroy(mask);
+}
 
 static void draw_button_glyph(cairo_t *cr, char kind, Rect b, const LxpColor *fg)
 {
@@ -249,6 +311,19 @@ static void draw_button_glyph(cairo_t *cr, char kind, Rect b, const LxpColor *fg
         return;
     }
     cairo_stroke(cr);
+}
+
+/* The theme's bitmap and color for this button, else a drawn glyph. */
+static void draw_title_button(const LxpPreviewModel *m, cairo_t *cr, char kind, Rect b,
+                              const LxpDecoration *d)
+{
+    int i = button_index(kind);
+    const LxpColor *fg = i >= 0 ? &d->button_kind_fg[i] : &d->button_fg;
+
+    if (i >= 0 && m->button_bitmaps[i])
+        draw_bitmap(cr, m->button_bitmaps[i], b, fg);
+    else
+        draw_button_glyph(cr, kind, b, fg);
 }
 
 static void fill_title(cairo_t *cr, Rect r, const LxpDecoration *d)
@@ -301,7 +376,7 @@ static Rect draw_frame(Ctx *ctx, Rect outer, gboolean active, const char *captio
         }
         if (d->button_bg_visible)
             fill_rect(cr, b, &d->button_bg, 1.0);
-        draw_button_glyph(cr, *c, b, &d->button_fg);
+        draw_title_button(m, cr, *c, b, d);
     }
     /* ...and right of it, from the right edge. */
     if (label_pos) {
@@ -314,7 +389,7 @@ static Rect draw_frame(Ctx *ctx, Rect outer, gboolean active, const char *captio
             }
             if (d->button_bg_visible)
                 fill_rect(cr, b, &d->button_bg, 1.0);
-            draw_button_glyph(cr, *c, b, &d->button_fg);
+            draw_title_button(m, cr, *c, b, d);
         }
 
         {
@@ -622,6 +697,8 @@ static void draw_panel(Ctx *ctx)
     cairo_save(cr);
     cairo_rectangle(cr, p.x, p.y, p.w, p.h);
     cairo_clip(cr);
+    if (m->blur && m->panel_opacity < 1)
+        draw_blurred_wallpaper(ctx, p);
     fill_rect(cr, p, &m->panel_bg, m->panel_opacity);
     if (horizontal)
         fill_rect(cr, (Rect){ p.x, g_str_equal(m->panel_position, "Top") ? p.y + p.h - 1 : p.y,
