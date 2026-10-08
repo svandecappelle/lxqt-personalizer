@@ -76,8 +76,11 @@ GPtrArray *lxp_paths_builtin_dirs(void)
     GPtrArray *dirs = g_ptr_array_new_with_free_func(g_free);
     const char *env = g_getenv("LXP_BUILTIN_DIR");
 
-    if (env && *env)
+    /* an explicit directory (development, tests) replaces the search path */
+    if (env && *env) {
         add_dir(dirs, g_strdup(env));
+        return dirs;
+    }
     for (const char *const *d = g_get_system_data_dirs(); *d; d++)
         add_dir(dirs, g_build_filename(*d, LXP_APP_ID, "themes", NULL));
     add_dir(dirs, g_build_filename(LXP_INSTALL_DATADIR, LXP_APP_ID, "themes", NULL));

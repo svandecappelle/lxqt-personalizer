@@ -9,9 +9,9 @@
 char *lxp_paths_themes_dir(void);
 
 /*
- * Directories holding built-in themes: $LXP_BUILTIN_DIR (development),
- * $XDG_DATA_DIRS/lxqt-personalizer/themes and the install prefix's.
- * Only existing ones.
+ * Directories holding built-in themes: $XDG_DATA_DIRS/lxqt-personalizer/themes
+ * and the install prefix's, or only $LXP_BUILTIN_DIR when it is set
+ * (development, tests). Only existing ones.
  */
 GPtrArray *lxp_paths_builtin_dirs(void);
 
