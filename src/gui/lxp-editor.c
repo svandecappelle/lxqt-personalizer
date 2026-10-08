@@ -29,6 +29,8 @@ static const char *const title_aligns[] = { "Left", "Center", "Right", NULL };
 static const char *const title_align_values[] = { "left", "center", "right", NULL };
 static const char *const button_sets[] = { "Openbox classic", "Minimal", "Colored dots", NULL };
 static const char *const button_set_values[] = { "classic", "minimal", "dots", NULL };
+static const char *const panel_styles[] = { "Underline", "Pills", "Flat", NULL };
+static const char *const panel_style_values[] = { "underline", "pills", "flat", NULL };
 static const char *const wallpaper_sources[] = {
     "Image file", "Generated: gradient", "Generated: blobs", "Generated: waves",
     "Generated: geometric", NULL,
@@ -112,6 +114,7 @@ typedef struct {
     GtkWidget *title_style, *title_padding, *border_width, *title_align, *buttons;
     GtkWidget *dark_mode;
     GtkWidget *tool_buttons;
+    GtkWidget *widget_radius;
     GtkWidget *icons_follow;
     GtkWidget *cursor_size;
     GtkWidget *font;
@@ -134,6 +137,7 @@ typedef struct {
     GtkWidget *panel_alignment;
     GtkWidget *panel_autohide;
     GtkWidget *panel_reserve;
+    GtkWidget *panel_style;
 
     /* Effects */
     GtkWidget *corner_radius;
@@ -362,6 +366,11 @@ static void read_form(Editor *ed, LxpScheme *s)
     s->keep_openbox = choice_get(&ed->openbox) != NULL;
     s->keep_gtk = choice_get(&ed->gtk) != NULL;
     s->keep_lxqt = choice_get(&ed->lxqt) != NULL;
+    s->keep_kvantum = choice_get(&ed->kvantum) != NULL;
+    s->widget_radius = spin_value(ed->widget_radius);
+    s->panel_style = g_strdup(panel_style_values[
+        MIN(gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->panel_style)), 2u)]);
+    s->has_widget_radius = TRUE;
 }
 
 static void set_int(LxpTheme *theme, const char *group, const char *key, int value)
@@ -412,10 +421,11 @@ static void update_theme(Editor *ed)
         lxp_theme_set_string(t, "Openbox", "title_layout", layout);
 
     /* the Kvantum theme only matters with the kvantum style */
+    /* generation names the generated Kvantum theme; else the chosen one */
     value = choice_get(&ed->style);
     if (value && g_ascii_strcasecmp(value, "kvantum") == 0 && choice_get(&ed->kvantum))
         lxp_theme_set_string(t, "Kvantum", "theme", choice_get(&ed->kvantum));
-    else
+    else if (!value || g_ascii_strcasecmp(value, "kvantum") != 0)
         lxp_theme_remove_group(t, "Kvantum");
 
     if ((value = choice_get(&ed->icons))) {
@@ -499,6 +509,10 @@ static void sync_sensitivity(Editor *ed)
 
     gtk_widget_set_sensitive(ed->kvantum.dropdown,
                              style && g_ascii_strcasecmp(style, "kvantum") == 0);
+    gtk_widget_set_sensitive(ed->panel_style, choice_get(&ed->lxqt) == NULL);
+    gtk_widget_set_sensitive(ed->widget_radius,
+                             style && g_ascii_strcasecmp(style, "kvantum") == 0 &&
+                             choice_get(&ed->kvantum) == NULL);
     {
         gboolean generated = choice_get(&ed->openbox) == NULL;
         gboolean image = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->wallpaper_source)) == 0;
@@ -539,7 +553,8 @@ static void update_warning(Editor *ed)
         g_string_append(text, "Title bar text is hard to read. ");
     if (*layout && !valid_title_layout(layout))
         g_string_append(text, "Title buttons: use the letters N D S L I M C, each once. ");
-    if (style && g_ascii_strcasecmp(style, "Fusion") != 0)
+    if (style && g_ascii_strcasecmp(style, "Fusion") != 0 &&
+        !(g_ascii_strcasecmp(style, "kvantum") == 0 && choice_get(&ed->kvantum) == NULL))
         g_string_append_printf(text, "The %s widget style uses its own colors in Qt "
                                      "applications. ", style);
     lxp_scheme_clear(&s);
@@ -1018,10 +1033,13 @@ static void build_appearance_page(Editor *ed, GtkWidget *box)
     gtk_widget_set_tooltip_text(ed->style.dropdown, "Widget style of Qt applications; "
                                                     "Fusion follows the colors");
     attach_row(apps, 2, "Widget style", ed->style.dropdown, NULL);
-    choice_init(ed, &ed->kvantum, lxp_catalog_list(LXP_CATALOG_KVANTUM), FALSE);
+    choice_init(ed, &ed->kvantum, lxp_catalog_list(LXP_CATALOG_KVANTUM), TRUE);
     gtk_widget_set_tooltip_text(ed->kvantum.dropdown, "Used with the kvantum widget style; "
                                                       "applications pick it up when restarted");
     attach_row(apps, 3, "Kvantum theme", ed->kvantum.dropdown, NULL);
+    ed->widget_radius = spin(ed, 0, 16, 1, "Corners of buttons, fields, menus and "
+                                           "selections in the generated Kvantum theme");
+    attach_row(apps, 8, "Widget corners", ed->widget_radius, NULL);
     choice_init(ed, &ed->icons, lxp_icon_themes_list(), FALSE);
     attach_row(apps, 4, "Icons", ed->icons.dropdown, NULL);
     ed->font = gtk_font_dialog_button_new(gtk_font_dialog_new());
@@ -1110,6 +1128,10 @@ static void build_desktop_page(Editor *ed, GtkWidget *box)
     attach_row(panel, 8, "Auto-hide", ed->panel_autohide, NULL);
     ed->panel_reserve = toggle(ed, "Keep maximized windows from covering the panel");
     attach_row(panel, 9, "Reserve space", ed->panel_reserve, NULL);
+    ed->panel_style = gtk_drop_down_new_from_strings(panel_styles);
+    gtk_widget_set_tooltip_text(ed->panel_style, "Task buttons of the generated LXQt theme");
+    g_signal_connect(ed->panel_style, "notify::selected", G_CALLBACK(on_changed), ed);
+    attach_row(panel, 10, "Task buttons", ed->panel_style, NULL);
     gtk_box_append(GTK_BOX(box), panel);
 }
 
@@ -1249,8 +1271,13 @@ static void load_form(Editor *ed)
     choice_set(&ed->style, ed->dir && (s.style || style) ? (s.style ? s.style : style)
                                                         : "Fusion");
     gtk_editable_set_text(GTK_EDITABLE(ed->title_layout), layout ? layout : "NLIMC");
-    if (kvantum)
-        choice_set(&ed->kvantum, kvantum);
+    /* generated unless an installed Kvantum theme is named */
+    choice_set(&ed->kvantum, kvantum && !is_generated(kvantum) && ed->dir ? kvantum : NULL);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->panel_style),
+        string_index(panel_style_values, s.panel_style ? s.panel_style : "underline"));
+    /* the scheme's radius, else the default for a generated Kvantum theme */
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->widget_radius),
+                              s.has_widget_radius ? s.widget_radius : 6);
     if (icons)
         choice_set(&ed->icons, icons);
     if (cursor)

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include "lxp-assets.h"
 #include "lxp-error.h"
 #include "lxp-libconfig.h"
 #include "lxp-palette.h"
@@ -220,6 +221,107 @@ static void test_builtin(void)
     g_unsetenv("LXP_BUILTIN_DIR");
 }
 
+static void test_kvantum_generation(void)
+{
+    g_autoptr(LxpTheme) theme = scheme_theme("Rounded");
+    g_autofree char *dir = g_build_filename(g_get_user_data_dir(), "rounded", NULL);
+    g_autoptr(GError) error = NULL;
+    g_autofree char *svg = NULL, *kvconfig = NULL, *name = NULL, *installed = NULL;
+    static const char *const ids[] = {
+        "button-normal-topleft", "button-focused", "lineedit-focused-bottomright",
+        "menu-normal-top", "itemview-pressed", "scrollbarslider-normal",
+        "checkbox-checked-normal", "radio-normal", "arrow-down-normal", "slidercursor-pressed",
+    };
+
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "style", "kvantum");
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "widget_radius", "8");
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    g_assert_true(lxp_theme_save(theme, dir, &error));
+    g_assert_no_error(error);
+
+    name = lxp_theme_get_string(theme, "Kvantum", "theme");
+    g_assert_cmpstr(name, ==, "lxp-rounded");
+    svg = read_file(dir, "config/Kvantum/lxp-rounded/lxp-rounded.svg");
+    kvconfig = read_file(dir, "config/Kvantum/lxp-rounded/lxp-rounded.kvconfig");
+    g_assert_nonnull(svg);
+    for (gsize i = 0; i < G_N_ELEMENTS(ids); i++) {
+        g_autofree char *id = g_strdup_printf("id=\"%s\"", ids[i]);
+        if (!strstr(svg, id))
+            g_error("missing SVG element %s", ids[i]);
+    }
+    g_assert_nonnull(strstr(svg, "A 8,8 0 0 1"));            /* rounded corners */
+    g_assert_nonnull(strstr(kvconfig, "highlight.color=#0a84ff"));
+    g_assert_nonnull(strstr(kvconfig, "frame.top=8"));
+    g_assert_nonnull(strstr(kvconfig, "[CheckBox]"));
+
+    /* installed into $XDG_CONFIG_HOME/Kvantum on apply */
+    {
+        g_autoptr(LxpTheme) loaded = lxp_theme_load(dir, &error);
+        g_assert_true(lxp_assets_install(loaded, &error));
+        g_assert_no_error(error);
+    }
+    installed = read_file(g_get_user_config_dir(), "Kvantum/lxp-rounded/lxp-rounded.kvconfig");
+    g_assert_cmpstr(installed, ==, kvconfig);
+
+    /* Fusion: no Kvantum theme generated */
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "style", "Fusion");
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    g_assert_false(readable(dir, "config/Kvantum/lxp-rounded/lxp-rounded.svg"));
+}
+
+static void test_gtk_corners_and_panel_styles(void)
+{
+    g_autoptr(LxpTheme) theme = scheme_theme("Shapes");
+    g_autofree char *dir = g_build_filename(g_get_user_data_dir(), "shapes", NULL);
+    g_autoptr(GError) error = NULL;
+    static const struct { const char *style, *expect; } styles[] = {
+        { "pills", "border-radius: 10px" },
+        { "flat", "margin: 0;" },
+        { "underline", "border-bottom: 2px solid #0a84ff;" },
+    };
+
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "widget_radius", "9");
+    for (gsize i = 0; i < G_N_ELEMENTS(styles); i++) {
+        g_autofree char *qss = NULL;
+
+        lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "panel_style", styles[i].style);
+        g_assert_true(lxp_scheme_generate(theme, dir, &error));
+        g_assert_no_error(error);
+        qss = read_file(dir, "data/lxqt/themes/lxp-shapes/lxqt-panel.qss");
+        if (!strstr(qss, styles[i].expect))
+            g_error("panel style %s: missing “%s”", styles[i].style, styles[i].expect);
+        g_assert_null(strstr(qss, "{{"));
+    }
+
+    /* the GTK themes get the widget corners, when GTK's own CSS was recolored */
+    {
+        g_autofree char *gtk3 = read_file(dir, "data/themes/lxp-shapes/gtk-3.0/gtk.css");
+        g_autofree char *gtk4 = read_file(dir, "data/themes/lxp-shapes/gtk-4.0/gtk.css");
+
+        if (strstr(gtk3, "from GTK 3's own stylesheet")) {
+            g_assert_nonnull(strstr(gtk3, "button, entry, spinbutton { border-radius: 9px; }"));
+            g_assert_nonnull(strstr(gtk3, "popover.background { border-radius: 11px; }"));
+        }
+        if (strstr(gtk4, "from GTK 4's own stylesheet"))
+            g_assert_nonnull(strstr(gtk4, "popover > contents { border-radius: 11px; }"));
+    }
+}
+
+static void test_config_kinds(void)
+{
+    g_autofree char *dir = g_build_filename(g_get_user_data_dir(), "sneaky", NULL);
+    g_autoptr(LxpTheme) theme = lxp_theme_new("Sneaky");
+    g_autoptr(GError) error = NULL;
+
+    /* an autostart entry would run a program at login: never installed */
+    write_file(dir, "config/autostart/.lxp-asset", "");
+    write_file(dir, "config/autostart/evil.desktop", "[Desktop Entry]\nExec=/bin/true\n");
+    g_assert_true(lxp_theme_save(theme, dir, &error));
+    g_assert_false(lxp_assets_install(theme, &error));
+    g_assert_error(error, LXP_ERROR, LXP_ERROR_INVALID);
+    g_assert_false(readable(g_get_user_config_dir(), "autostart/evil.desktop"));
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
@@ -229,5 +331,8 @@ int main(int argc, char **argv)
     g_test_add_func("/tier1/palette", test_palette);
     g_test_add_func("/tier1/libconfig-structured", test_libconfig_structured);
     g_test_add_func("/tier1/builtin", test_builtin);
+    g_test_add_func("/tier2/kvantum-generation", test_kvantum_generation);
+    g_test_add_func("/tier2/config-kinds", test_config_kinds);
+    g_test_add_func("/tier2/gtk-corners-and-panel-styles", test_gtk_corners_and_panel_styles);
     return g_test_run();
 }

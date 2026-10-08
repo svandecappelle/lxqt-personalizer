@@ -73,6 +73,9 @@ static char *current_icon_theme(void)
     return g_strdup("hicolor");
 }
 
+static int theme_int(const LxpTheme *theme, const char *group, const char *key,
+                     int fallback);
+
 static void load_palette(LxpPreviewModel *m, const LxpTheme *theme)
 {
     g_autofree char *font = lxp_theme_get_string(theme, "LXQt", "font");
@@ -105,6 +108,15 @@ static void load_palette(LxpPreviewModel *m, const LxpTheme *theme)
     m->font_size = 10;
     parse_qt_font(font, &m->font_family, &m->font_size);
     m->icon_theme = icons ? g_strdup(icons) : current_icon_theme();
+
+    /* Kvantum (generated or not) rounds widgets; Fusion barely does */
+    {
+        g_autofree char *style = lxp_theme_get_string(theme, "LXQt", "style");
+        gboolean kvantum = style && g_ascii_strcasecmp(style, "kvantum") == 0;
+        m->widget_radius = kvantum ? CLAMP(theme_int(theme, LXP_SCHEME_GROUP, "widget_radius", 6),
+                                           0, 16)
+                                   : 2;
+    }
 }
 
 /* themerc and .xbm names of LxpButton values */
@@ -246,6 +258,13 @@ static void load_panel(LxpPreviewModel *m, const LxpTheme *theme)
     gboolean has_scheme = lxp_scheme_load(theme, &scheme, NULL);
 
     m->panel_position = g_strdup(position ? position : "Bottom");
+    {
+        /* only the generated LXQt theme has a choice of task buttons */
+        g_autofree char *lxqt = lxp_theme_get_string(theme, "LXQt", "theme");
+        g_autofree char *style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "panel_style");
+        m->panel_style = g_strdup(lxqt && g_str_has_prefix(lxqt, "lxp-") && style
+                                  ? style : "underline");
+    }
     m->panel_size = CLAMP(theme_int(theme, "Panel", "panelSize", 32), 16, 128);
     m->panel_icon_size = CLAMP(theme_int(theme, "Panel", "iconSize", 22), 8, 96);
     m->panel_opacity = CLAMP(theme_int(theme, "Panel", "opacity", 100), 0, 100) / 100.0;
@@ -336,6 +355,7 @@ void lxp_preview_model_free(LxpPreviewModel *m)
     g_free(m->title_justify);
     g_free(m->title_font_family);
     g_free(m->panel_position);
+    g_free(m->panel_style);
     g_free(m->wallpaper);
     g_free(m->wallpaper_mode);
     g_free(m);

@@ -3,6 +3,7 @@
 
 #include "lxp-error.h"
 #include "lxp-fileutil.h"
+#include "lxp-kvantum-gen.h"
 #include "lxp-recolor.h"
 #include "lxp-template.h"
 #include "lxp-xbm.h"
@@ -49,12 +50,16 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
     s->gtk_font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "gtk_font");
     s->prefer_dark = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "prefer_dark");
     s->title_style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_style");
+    s->panel_style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "panel_style");
     s->title_align = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_align");
     s->buttons = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "buttons");
     {
         g_autofree char *padding = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_padding");
         g_autofree char *border = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "border_width");
         s->title_padding = padding ? CLAMP(atoi(padding), 1, 16) : 0;
+        g_autofree char *wr = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "widget_radius");
+        s->has_widget_radius = wr != NULL;
+        s->widget_radius = wr ? CLAMP(atoi(wr), 0, 16) : 6;
         s->has_border_width = border != NULL;
         s->border_width = border ? CLAMP(atoi(border), 0, 4) : 1;
     }
@@ -71,6 +76,7 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
         s->keep_openbox = !all && !g_strv_contains((const char *const *)parts, "openbox");
         s->keep_gtk = !all && !g_strv_contains((const char *const *)parts, "gtk");
         s->keep_lxqt = !all && !g_strv_contains((const char *const *)parts, "lxqt");
+        s->keep_kvantum = !all && !g_strv_contains((const char *const *)parts, "kvantum");
     }
     return TRUE;
 }
@@ -100,6 +106,8 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
                          s->prefer_dark && *s->prefer_dark ? s->prefer_dark : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_style",
                          s->title_style && *s->title_style ? s->title_style : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "panel_style",
+                         s->panel_style && *s->panel_style ? s->panel_style : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_align",
                          s->title_align && *s->title_align ? s->title_align : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "buttons",
@@ -112,6 +120,11 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
         lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_padding", padding);
         lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "border_width", border);
     }
+    {
+        g_autofree char *wr = s->has_widget_radius ? g_strdup_printf("%d", s->widget_radius)
+                                                   : NULL;
+        lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "widget_radius", wr);
+    }
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "wallpaper",
                          s->wallpaper && *s->wallpaper ? s->wallpaper : NULL);
     if (s->wallpaper && *s->wallpaper) {
@@ -123,10 +136,10 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "style",
                          s->style && *s->style ? s->style : NULL);
 
-    if (!s->keep_openbox && !s->keep_gtk && !s->keep_lxqt) {
+    if (!s->keep_openbox && !s->keep_gtk && !s->keep_lxqt && !s->keep_kvantum) {
         lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "generate", NULL);
     } else {
-        const char *parts[4];
+        const char *parts[5];
         int n = 0;
 
         if (!s->keep_openbox)
@@ -135,6 +148,8 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
             parts[n++] = "gtk";
         if (!s->keep_lxqt)
             parts[n++] = "lxqt";
+        if (!s->keep_kvantum)
+            parts[n++] = "kvantum";
         parts[n] = NULL;
         lxp_theme_set_string_list(theme, LXP_SCHEME_GROUP, "generate", parts);
     }
@@ -169,6 +184,7 @@ void lxp_scheme_clear(LxpScheme *s)
     g_clear_pointer(&s->prefer_dark, g_free);
     g_clear_pointer(&s->wallpaper, g_free);
     g_clear_pointer(&s->title_style, g_free);
+    g_clear_pointer(&s->panel_style, g_free);
     g_clear_pointer(&s->title_align, g_free);
     g_clear_pointer(&s->buttons, g_free);
     g_clear_pointer(&s->style, g_free);
@@ -338,6 +354,40 @@ static char *button_rules(const LxpScheme *s, const LxpSchemeColors *c)
     return g_string_free(r, FALSE);
 }
 
+/* Task button rules of the generated LXQt panel theme. */
+static void add_panel_style(GHashTable *vars, const LxpScheme *s, const LxpSchemeColors *c)
+{
+    g_autofree char *accent = lxp_color_to_hex(&c->accent);
+    g_autofree char *accent_rgb = lxp_color_to_rgb_triplet(&c->accent);
+    g_autofree char *fg_rgb = lxp_color_to_rgb_triplet(&c->panel_fg);
+    int radius = s->has_widget_radius ? s->widget_radius : 6;
+
+    if (g_strcmp0(s->panel_style, "pills") == 0) {
+        add_int(vars, "panel_radius", 10);
+        add_text(vars, "task_margin", "4px 2px");
+        g_hash_table_insert(vars, g_strdup("task_on_rules"),
+                            g_strdup_printf("    background-color: rgba(%s, 0.55);", accent_rgb));
+        g_hash_table_insert(vars, g_strdup("task_on_hover_rules"),
+                            g_strdup_printf("    background-color: rgba(%s, 0.70);", accent_rgb));
+    } else if (g_strcmp0(s->panel_style, "flat") == 0) {
+        add_int(vars, "panel_radius", 0);
+        add_text(vars, "task_margin", "0");
+        g_hash_table_insert(vars, g_strdup("task_on_rules"),
+                            g_strdup_printf("    background-color: rgba(%s, 0.16);", fg_rgb));
+        g_hash_table_insert(vars, g_strdup("task_on_hover_rules"),
+                            g_strdup_printf("    background-color: rgba(%s, 0.24);", fg_rgb));
+    } else {
+        add_int(vars, "panel_radius", MIN(radius, 6));
+        add_text(vars, "task_margin", "2px 1px");
+        g_hash_table_insert(vars, g_strdup("task_on_rules"),
+                            g_strdup_printf("    background-color: rgba(%s, 0.25);\n"
+                                            "    border-bottom: 2px solid %s;", accent_rgb, accent));
+        g_hash_table_insert(vars, g_strdup("task_on_hover_rules"),
+                            g_strdup_printf("    background-color: rgba(%s, 0.40);", accent_rgb));
+    }
+    add_int(vars, "menu_item_radius", MAX(radius - 2, 0));
+}
+
 static void add_window_style(GHashTable *vars, const LxpScheme *s, const LxpSchemeColors *c)
 {
     gboolean gradient = g_strcmp0(s->title_style, "gradient") == 0;
@@ -484,8 +534,27 @@ static char *gtk_base_css(int major, gboolean dark)
     return css;
 }
 
+/* Corners from the scheme, after GTK's own rules (linked groups keep theirs). */
+static char *gtk_corners(int major, int radius)
+{
+    int popover = MIN(radius + 2, 12), tip = MIN(radius, 8);
+
+    if (major == 3)
+        return g_strdup_printf("\n/* corners from the scheme */\n"
+                               "button, entry, spinbutton { border-radius: %dpx; }\n"
+                               "popover.background { border-radius: %dpx; }\n"
+                               "tooltip.background, tooltip { border-radius: %dpx; }\n",
+                               radius, popover, tip);
+    return g_strdup_printf("\n/* corners from the scheme */\n"
+                           "button, entry, spinbutton, dropdown > button { border-radius: %dpx; }\n"
+                           "popover > contents { border-radius: %dpx; }\n"
+                           "tooltip { border-radius: %dpx; }\n",
+                           radius, popover, tip);
+}
+
 static gboolean write_gtk_css(int major, const char *name, const LxpSchemeColors *c,
-                              GHashTable *vars, const char *theme_dir, GError **error)
+                              GHashTable *vars, int radius, const char *theme_dir,
+                              GError **error)
 {
     g_autofree char *base = gtk_base_css(major, c->dark);
     g_autofree char *css = NULL;
@@ -499,10 +568,12 @@ static gboolean write_gtk_css(int major, const char *name, const LxpSchemeColors
         g_autofree char *recolored = lxp_recolor_css(base, &from, &to);
         g_autofree char *accent_fg = lxp_color_to_hex(&c->accent_fg);
 
+        g_autofree char *corners = gtk_corners(major, radius);
+
         css = g_strdup_printf("/* %s — generated by lxqt-personalizer from GTK %d's own "
                               "stylesheet, regenerate instead of editing. */\n\n%s\n"
-                              "@define-color theme_selected_fg_color %s;\n",
-                              name, major, recolored, accent_fg);
+                              "@define-color theme_selected_fg_color %s;\n%s",
+                              name, major, recolored, accent_fg, corners);
     } else {
         css = lxp_template_expand_resource("gtk-fallback.css", vars, error);
         if (!css)
@@ -666,6 +737,26 @@ static gboolean remove_stale_units(const char *dir, const char *kind, const char
     return TRUE;
 }
 
+/* Same for config/<kind> (the Kvantum themes). */
+static gboolean remove_stale_config_units(const char *dir, const char *kind, const char *keep,
+                                          GError **error)
+{
+    g_autofree char *config = g_build_filename(dir, "config", NULL);
+    g_autofree char *parent = g_build_filename(config, kind, NULL);
+    g_autoptr(GDir) d = g_dir_open(parent, 0, NULL);
+    const char *name;
+
+    while (d && (name = g_dir_read_name(d))) {
+        g_autofree char *unit = g_build_filename(parent, name, NULL);
+        g_autofree char *marker = g_build_filename(unit, ASSET_MARKER, NULL);
+
+        if (g_str_has_prefix(name, "lxp-") && !g_str_equal(name, keep) &&
+            g_file_test(marker, G_FILE_TEST_EXISTS) && !lxp_remove_tree(unit, error))
+            return FALSE;
+    }
+    return TRUE;
+}
+
 gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
 {
     LxpScheme s;
@@ -673,6 +764,8 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
     g_autofree char *name = NULL;
     g_autofree char *themes_dir = NULL;
     g_autofree char *lxqt_dir = NULL;
+    g_autofree char *kvantum_dir = NULL;
+    gboolean gen_kvantum;
     g_autoptr(GHashTable) vars = NULL;
     gboolean ok;
 
@@ -682,13 +775,23 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
     name = lxp_scheme_asset_name(theme);
     vars = template_vars(name, &c);
     add_window_style(vars, &s, &c);
+    add_panel_style(vars, &s, &c);
 
+    kvantum_dir = g_build_filename(dir, "config", "Kvantum", name, NULL);
+    gen_kvantum = s.style && g_ascii_strcasecmp(s.style, "kvantum") == 0 && !s.keep_kvantum;
     themes_dir = g_build_filename(dir, "data", "themes", name, NULL);
     lxqt_dir = g_build_filename(dir, "data", "lxqt", "themes", name, NULL);
 
     ok = remove_stale_units(dir, "themes", name, error) &&
          remove_stale_units(dir, "lxqt/themes", name, error) &&
-         lxp_remove_tree(themes_dir, error) && lxp_remove_tree(lxqt_dir, error);
+         remove_stale_config_units(dir, "Kvantum", name, error) &&
+         lxp_remove_tree(themes_dir, error) && lxp_remove_tree(lxqt_dir, error) &&
+         lxp_remove_tree(kvantum_dir, error);
+
+    /* config/Kvantum/<name>: rounded Qt widgets in the scheme's colors */
+    if (ok && gen_kvantum)
+        ok = write_marker(kvantum_dir, error) &&
+             lxp_kvantum_generate(&c, s.widget_radius, name, kvantum_dir, error);
 
     /* themes/<name> holds the Openbox and GTK parts */
     if (ok && (!s.keep_openbox || !s.keep_gtk))
@@ -698,8 +801,8 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
         ok = write_template("themerc", vars, themes_dir, "openbox-3/themerc", error) &&
              write_buttons(themes_dir, s.buttons, error);
     if (ok && !s.keep_gtk)
-        ok = write_gtk_css(3, name, &c, vars, themes_dir, error) &&
-             write_gtk_css(4, name, &c, vars, themes_dir, error);
+        ok = write_gtk_css(3, name, &c, vars, s.widget_radius, themes_dir, error) &&
+             write_gtk_css(4, name, &c, vars, s.widget_radius, themes_dir, error);
     if (ok && !s.keep_lxqt)
         ok = write_marker(lxqt_dir, error) &&
              write_template("lxqt-panel.qss", vars, lxqt_dir, "lxqt-panel.qss", error) &&
@@ -707,8 +810,11 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
              write_template("lxqt-notificationd.qss", vars, lxqt_dir,
                             "lxqt-notificationd.qss", error);
 
-    if (ok)
+    if (ok) {
         set_theme_keys(theme, name, &s, &c);
+        if (gen_kvantum)
+            lxp_theme_set_string(theme, "Kvantum", "theme", name);
+    }
     lxp_scheme_clear(&s);
     return ok;
 }

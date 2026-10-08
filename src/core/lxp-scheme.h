@@ -29,9 +29,13 @@
  *   title_align=center     left, center or right
  *   buttons=dots           classic (Openbox's own), minimal (thin lines,
  *                          red close on hover) or dots (colored circles)
+ *   panel_style=pills      task buttons of the generated LXQt theme:
+ *                          underline (default), pills or flat
+ *   widget_radius=6        corners of buttons, fields and selections in the
+ *                          generated Kvantum theme (with style=kvantum)
  *   style=kvantum          optional Qt widget style (default Fusion, which
  *                          follows the palette everywhere)
- *   generate=openbox;gtk;lxqt
+ *   generate=openbox;gtk;lxqt;kvantum
  *                          optional: which themes are generated from the
  *                          colors (default all); for the others the
  *                          theme keeps the installed theme it names
@@ -57,7 +61,10 @@ typedef struct {
     guint32  wallpaper_seed;
     char    *style;
     /* use the installed theme named in the theme instead of generating */
-    gboolean keep_openbox, keep_gtk, keep_lxqt;
+    gboolean keep_openbox, keep_gtk, keep_lxqt, keep_kvantum;
+    int      widget_radius;
+    gboolean has_widget_radius;  /* else 6 */
+    char    *panel_style;        /* NULL: underline */
 } LxpScheme;
 
 /* Every color the generated files use, derived from a scheme. */

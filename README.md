@@ -62,8 +62,8 @@ wallpaper is copied into the theme folder.
 
 | Theme | Look |
 |---|---|
-| **Mac-like** | Light, frosted top bar, colored window buttons on the left, centered titles, no borders, 12 px corners with deep soft shadows, smooth animations, soft color-field wallpaper. |
-| **Win11-like** | Light, frosted 46 px taskbar, minimal window buttons with a red close on hover, left titles, 8 px corners, subtle animations, wave wallpaper. |
+| **Mac-like** | Light, frosted top bar with flat task buttons, colored window buttons on the left, centered titles, no borders, 12 px window corners with deep soft shadows, rounded 6 px widgets, smooth animations, soft color-field wallpaper. |
+| **Win11-like** | Light, frosted 46 px taskbar with underlined active buttons, minimal window buttons with a red close on hover, left titles, 8 px window corners, 4 px widgets, subtle animations, wave wallpaper. |
 
 Built-ins are installed read-only in `/usr/share/lxqt-personalizer/themes`
 and generated into `~/.cache/lxqt-personalizer` on first use. **Duplicate &
@@ -84,6 +84,15 @@ so the Win11-like taskbar keeps them on the left.
   animation presets (subtle, smooth, dynamic; picom 12 or newer).
 - **Palette tools** — colors from the wallpaper, light ⇄ dark, opposite or
   nearby accent.
+- **Rounded Qt widgets** — with the *kvantum* widget style, a Kvantum theme
+  is generated from the colors: rounded buttons, fields, menus, selections,
+  tabs, scrollbars, sliders, check boxes and radio buttons, with one corner
+  radius (`widget_radius=` in `[Scheme]`, *Widget corners* in the editor).
+  It is installed into `~/.config/Kvantum`; applications pick it up when
+  restarted.
+- **GTK corners** — the same radius on GTK buttons, fields and popovers.
+- **Panel styles** — task buttons as an underline, pills or flat
+  (`panel_style=`), with the generated LXQt theme.
 
 ## Sharing themes
 
@@ -112,7 +121,8 @@ keep it; **Apply** applies it; the header bar creates a new theme, saves
 the current desktop as a theme and undoes the last change.
 
 **Import Theme…** (Ctrl+O, in the menu) and **Export…** share themes as
-packs (the menu also exports without bundled themes). **Apply Parts…**
+packs (the menu also exports without bundled themes; generated Kvantum
+themes are part of the theme). **Apply Parts…**
 applies or tries only some parts of a theme, **History** lists the backups
 to restore, and the details warn about anything a theme needs that is
 missing. **New Theme** (Ctrl+N) and **Edit Colors…** open the editor, with a

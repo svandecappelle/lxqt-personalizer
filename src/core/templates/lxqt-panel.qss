@@ -23,7 +23,7 @@ LXQtPanelPlugin > QToolButton,
     color: {{panel_fg}};
     background: transparent;
     border: none;
-    border-radius: 3px;
+    border-radius: {{panel_radius}}px;
     padding: 1px 3px;
 }
 
@@ -42,19 +42,18 @@ LXQtPanelPlugin > QToolButton:pressed,
 }
 
 #TaskBar QToolButton {
-    margin: 2px 1px;
-    padding: 0 6px;
+    margin: {{task_margin}};
+    padding: 0 8px;
 }
 
 #TaskBar QToolButton:on,
 #DesktopSwitch QToolButton:on {
-    background-color: rgba({{accent_rgb}}, 0.40);
-    border-bottom: 2px solid {{accent}};
+{{task_on_rules}}
 }
 
 #TaskBar QToolButton:on:hover,
 #DesktopSwitch QToolButton:on:hover {
-    background-color: rgba({{accent_rgb}}, 0.55);
+{{task_on_hover_rules}}
 }
 
 #TaskBar QToolButton[urgent="true"],
@@ -89,7 +88,7 @@ QMenu {
 
 QMenu::item {
     padding: 4px 22px 4px 8px;
-    border-radius: 3px;
+    border-radius: {{menu_item_radius}}px;
 }
 
 QMenu::item:selected {

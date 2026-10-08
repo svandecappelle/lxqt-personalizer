@@ -437,7 +437,7 @@ static void draw_button(Ctx *ctx, Rect r, const char *label)
     const LxpPreviewModel *m = ctx->m;
     LxpColor edge = lxp_color_mix(&m->button, &m->window_text, 0.3);
 
-    rounded(ctx->cr, r, 3);
+    rounded(ctx->cr, r, ctx->m->widget_radius);
     set_color(ctx->cr, &m->button, 1.0);
     cairo_fill_preserve(ctx->cr);
     set_color(ctx->cr, &edge, 1.0);
@@ -482,7 +482,7 @@ static void draw_files(Ctx *ctx, Rect c)
     icon(ctx, ICON("go-previous", "go-previous-symbolic"), c.x + 10, c.y + 10, 20);
     icon(ctx, ICON("go-next", "go-next-symbolic"), c.x + 44, c.y + 10, 20);
     icon(ctx, ICON("go-up", "go-up-symbolic"), c.x + 78, c.y + 10, 20);
-    rounded(cr, path, 3);
+    rounded(cr, path, m->widget_radius);
     set_color(cr, &m->base, 1.0);
     cairo_fill_preserve(cr);
     set_color(cr, &line, 1.0);
@@ -497,7 +497,7 @@ static void draw_files(Ctx *ctx, Rect c)
         const LxpColor *fg = &m->window_text;
 
         if (i == 0) {
-            rounded(cr, row, 3);
+            rounded(cr, row, m->widget_radius);
             set_color(cr, &m->highlight, 1.0);
             cairo_fill(cr);
             fg = &m->highlighted_text;
@@ -517,10 +517,10 @@ static void draw_files(Ctx *ctx, Rect c)
         const LxpColor *fg = &m->text;
 
         if (i == 3) {
-            rounded(cr, cell, 4);
+            rounded(cr, cell, m->widget_radius + 1);
             set_color(cr, &m->highlight, 0.35);
             cairo_fill(cr);
-            rounded(cr, label, 3);
+            rounded(cr, label, m->widget_radius);
             set_color(cr, &m->highlight, 1.0);
             cairo_fill(cr);
             fg = &m->highlighted_text;
@@ -735,12 +735,29 @@ static void draw_panel(Ctx *ctx)
         Rect b = horizontal ? (Rect){ p.x + pos, p.y + 3, len, p.h - 6 }
                             : (Rect){ p.x + 2, p.y + pos, thick - 4, len };
 
-        rounded(cr, b, 3);
-        if (i == 0)
-            set_color(cr, &m->highlight, 0.45);
-        else
-            set_color(cr, &m->panel_text, 0.08);
-        cairo_fill(cr);
+        /* the generated LXQt theme's task button style */
+        if (g_strcmp0(m->panel_style, "pills") == 0) {
+            Rect pill = inset(b, 1);
+            rounded(cr, pill, MIN(pill.w, pill.h) / 2);
+            if (i == 0)
+                set_color(cr, &m->highlight, 0.55);
+            else
+                set_color(cr, &m->panel_text, 0.06);
+            cairo_fill(cr);
+        } else if (g_strcmp0(m->panel_style, "flat") == 0) {
+            cairo_rectangle(cr, b.x, p.y, b.w, horizontal ? p.h : b.h);
+            set_color(cr, &m->panel_text, i == 0 ? 0.16 : 0);
+            cairo_fill(cr);
+        } else {
+            rounded(cr, b, 3);
+            if (i == 0)
+                set_color(cr, &m->highlight, 0.30);
+            else
+                set_color(cr, &m->panel_text, 0.08);
+            cairo_fill(cr);
+            if (i == 0 && horizontal)
+                fill_rect(cr, (Rect){ b.x, b.y + b.h - 2, b.w, 2 }, &m->highlight, 1);
+        }
         if (labels) {
             icon(ctx, names, b.x + 6, p.y + off, isz);
             ui_text(ctx, (Rect){ b.x + isz + 12, b.y, b.w - isz - 18, b.h }, label,

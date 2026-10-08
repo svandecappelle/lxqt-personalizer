@@ -14,6 +14,9 @@
  *                    copy, but never a directory without the marker
  *   install=if-missing  third-party theme bundled in a pack: installed
  *                    only when nothing of that name exists yet
+ *
+ * <theme dir>/config/ works the same way for $XDG_CONFIG_HOME, where only
+ * Kvantum themes (config/Kvantum/X) can be installed.
  */
 
 #define LXP_ASSET_MARKER     ".lxp-asset"
@@ -30,3 +33,7 @@ char    *lxp_assets_find(const LxpTheme *theme, const char *kind, const char *na
 
 /* Is <relpath> (e.g. "themes/Foo") an installable unit location? */
 gboolean lxp_assets_kind_allowed(const char *relpath);
+
+/* Like lxp_assets_find() for <theme dir>/config/<kind>/<name>. */
+char    *lxp_assets_find_config(const LxpTheme *theme, const char *kind, const char *name,
+                                const char *probe);

@@ -6,6 +6,7 @@
  */
 #include "backends.h"
 
+#include "lxp-assets.h"
 #include "lxp-catalog.h"
 #include "lxp-error.h"
 #include "lxp-ini.h"
@@ -39,7 +40,12 @@ static gboolean kvantum_check(const LxpTheme *theme, GError **error)
 
     if (!name || g_str_equal(name, "Default"))
         return TRUE;
-    return lxp_backend_require(lxp_catalog_find_kvantum(name), "Kvantum theme", name, error);
+    {
+        char *found = lxp_catalog_find_kvantum(name);
+        if (!found)
+            found = lxp_assets_find_config(theme, "Kvantum", name, NULL);
+        return lxp_backend_require(found, "Kvantum theme", name, error);
+    }
 }
 
 static gboolean kvantum_capture(LxpTheme *theme, GError **error)

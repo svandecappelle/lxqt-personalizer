@@ -347,7 +347,7 @@ static void test_keep_installed(void)
     g_assert_cmpstr(openbox, ==, "Arrondie-Violet");
     g_assert_cmpstr(gtk, ==, "lxp-mixed");
     g_assert_cmpstr(style, ==, "kvantum");
-    g_assert_cmpstr(generate, ==, "gtk;lxqt;");
+    g_assert_cmpstr(generate, ==, "gtk;lxqt;kvantum;");
     g_assert_false(exists_in(dir, "data/themes/lxp-mixed/openbox-3/themerc"));
     g_assert_true(exists_in(dir, "data/themes/lxp-mixed/gtk-3.0/gtk.css"));
 

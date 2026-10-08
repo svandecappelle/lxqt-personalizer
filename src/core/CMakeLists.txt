@@ -23,6 +23,7 @@ add_library(lxp STATIC
     lxp-paths.c
     lxp-fileutil.c
     lxp-ini.c
+    lxp-kvantum-gen.c
     lxp-libconfig.c
     lxp-system.c
     lxp-theme.c

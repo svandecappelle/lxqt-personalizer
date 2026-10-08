@@ -42,6 +42,7 @@ typedef struct {
     char    *font_family;
     double   font_size;          /* points */
     char    *icon_theme;
+    int      widget_radius;      /* buttons, fields, selections */
 
     /* Openbox */
     gboolean      has_openbox;   /* themerc found */
@@ -60,6 +61,7 @@ typedef struct {
 
     /* LXQt panel */
     char    *panel_position;     /* "Bottom", "Top", "Left", "Right" */
+    char    *panel_style;        /* task buttons: underline, pills, flat */
     int      panel_size;
     int      panel_icon_size;
     double   panel_opacity;      /* 0..1 */

@@ -11,14 +11,20 @@
 
 /* Parents an installable unit may live in, relative to the data dir. */
 static const char *const allowed_kinds[] = { "themes", "lxqt/themes", "icons", NULL };
+static const char *const allowed_config_kinds[] = { "Kvantum", NULL };
 
-gboolean lxp_assets_kind_allowed(const char *relpath)
+static gboolean kind_allowed(const char *relpath, const char *const *kinds)
 {
     g_autofree char *parent = g_path_get_dirname(relpath);
     g_autofree char *base = g_path_get_basename(relpath);
 
-    return g_strv_contains(allowed_kinds, parent) && *base && *base != '.' &&
+    return g_strv_contains(kinds, parent) && *base && *base != '.' &&
            !strchr(base, G_DIR_SEPARATOR);
+}
+
+gboolean lxp_assets_kind_allowed(const char *relpath)
+{
+    return kind_allowed(relpath, allowed_kinds);
 }
 
 static gboolean marker_says_if_missing(const char *dir)
@@ -67,16 +73,16 @@ static gboolean install_unit(const char *unit, const char *dest, GError **error)
 
 /* <rel> is the path of <src> relative to the theme's data/ directory. */
 static gboolean install_dir(const char *src, const char *dest, const char *rel,
-                            int depth, GError **error)
+                            const char *const *kinds, int depth, GError **error)
 {
     g_autoptr(GDir) dir = NULL;
     const char *name;
 
     if (has_marker(src)) {
-        if (!lxp_assets_kind_allowed(rel)) {
+        if (!kind_allowed(rel, kinds)) {
             g_set_error(error, LXP_ERROR, LXP_ERROR_INVALID,
                         "Theme data “%s” cannot be installed: only themes, "
-                        "lxqt/themes and icons are allowed", rel);
+                        "lxqt/themes, icons and Kvantum themes are allowed", rel);
             return FALSE;
         }
         return install_unit(src, dest, error);
@@ -90,7 +96,7 @@ static gboolean install_dir(const char *src, const char *dest, const char *rel,
         g_autofree char *r = *rel ? g_build_filename(rel, name, NULL) : g_strdup(name);
 
         if (g_file_test(s, G_FILE_TEST_IS_DIR) && !g_file_test(s, G_FILE_TEST_IS_SYMLINK) &&
-            !install_dir(s, d, r, depth + 1, error))
+            !install_dir(s, d, r, kinds, depth + 1, error))
             return FALSE;
     }
     return TRUE;
@@ -100,10 +106,15 @@ gboolean lxp_assets_install(const LxpTheme *theme, GError **error)
 {
     const char *dir = lxp_theme_get_dir(theme);
     g_autofree char *data = dir ? g_build_filename(dir, "data", NULL) : NULL;
+    g_autofree char *config = dir ? g_build_filename(dir, "config", NULL) : NULL;
 
-    if (!data || !g_file_test(data, G_FILE_TEST_IS_DIR))
-        return TRUE;
-    return install_dir(data, g_get_user_data_dir(), "", 0, error);
+    if (data && g_file_test(data, G_FILE_TEST_IS_DIR) &&
+        !install_dir(data, g_get_user_data_dir(), "", allowed_kinds, 0, error))
+        return FALSE;
+    if (config && g_file_test(config, G_FILE_TEST_IS_DIR) &&
+        !install_dir(config, g_get_user_config_dir(), "", allowed_config_kinds, 0, error))
+        return FALSE;
+    return TRUE;
 }
 
 char *lxp_assets_find(const LxpTheme *theme, const char *kind, const char *name,
@@ -116,6 +127,20 @@ char *lxp_assets_find(const LxpTheme *theme, const char *kind, const char *name,
     if (!dir || !name || !*name || strchr(name, G_DIR_SEPARATOR))
         return NULL;
     unit = g_build_filename(dir, "data", kind, name, NULL);
+    path = probe ? g_build_filename(unit, probe, NULL) : g_strdup(unit);
+    return g_file_test(path, G_FILE_TEST_EXISTS) ? g_steal_pointer(&unit) : NULL;
+}
+
+char *lxp_assets_find_config(const LxpTheme *theme, const char *kind, const char *name,
+                             const char *probe)
+{
+    const char *dir = lxp_theme_get_dir(theme);
+    g_autofree char *unit = NULL;
+    g_autofree char *path = NULL;
+
+    if (!dir || !name || !*name || strchr(name, G_DIR_SEPARATOR))
+        return NULL;
+    unit = g_build_filename(dir, "config", kind, name, NULL);
     path = probe ? g_build_filename(unit, probe, NULL) : g_strdup(unit);
     return g_file_test(path, G_FILE_TEST_EXISTS) ? g_steal_pointer(&unit) : NULL;
 }
