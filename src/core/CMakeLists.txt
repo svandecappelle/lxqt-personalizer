@@ -29,6 +29,7 @@ add_library(lxp STATIC
     lxp-themerc.c
     lxp-apply.c
     lxp-backend.c
+    lxp-catalog.c
     lxp-color.c
     lxp-snapshot.c
     backends/lxqt.c

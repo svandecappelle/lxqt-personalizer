@@ -42,6 +42,15 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
     s->has_title = get_color(theme, "title", &s->title, FALSE, NULL);
     s->has_panel = get_color(theme, "panel", &s->panel, FALSE, NULL);
     s->font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "font");
+    s->style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "style");
+    {
+        g_auto(GStrv) parts = lxp_theme_get_string_list(theme, LXP_SCHEME_GROUP, "generate");
+        gboolean all = parts == NULL;
+
+        s->keep_openbox = !all && !g_strv_contains((const char *const *)parts, "openbox");
+        s->keep_gtk = !all && !g_strv_contains((const char *const *)parts, "gtk");
+        s->keep_lxqt = !all && !g_strv_contains((const char *const *)parts, "lxqt");
+    }
     return TRUE;
 }
 
@@ -61,6 +70,24 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
     set_color(theme, "title", &s->title, s->has_title);
     set_color(theme, "panel", &s->panel, s->has_panel);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "font", s->font && *s->font ? s->font : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "style",
+                         s->style && *s->style ? s->style : NULL);
+
+    if (!s->keep_openbox && !s->keep_gtk && !s->keep_lxqt) {
+        lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "generate", NULL);
+    } else {
+        const char *parts[4];
+        int n = 0;
+
+        if (!s->keep_openbox)
+            parts[n++] = "openbox";
+        if (!s->keep_gtk)
+            parts[n++] = "gtk";
+        if (!s->keep_lxqt)
+            parts[n++] = "lxqt";
+        parts[n] = NULL;
+        lxp_theme_set_string_list(theme, LXP_SCHEME_GROUP, "generate", parts);
+    }
 }
 
 gboolean lxp_scheme_from_palette(const LxpTheme *theme, LxpScheme *s)
@@ -87,6 +114,7 @@ gboolean lxp_scheme_from_palette(const LxpTheme *theme, LxpScheme *s)
 void lxp_scheme_clear(LxpScheme *s)
 {
     g_clear_pointer(&s->font, g_free);
+    g_clear_pointer(&s->style, g_free);
 }
 
 /* --- derived colors ----------------------------------------------------- */
@@ -328,8 +356,9 @@ static void set_theme_keys(LxpTheme *theme, const char *name, const LxpScheme *s
         { "link_color", &c->link },          { "link_visited_color", &c->link_visited },
     };
 
-    lxp_theme_set_string(theme, "LXQt", "theme", name);
-    lxp_theme_set_string(theme, "LXQt", "style", "Fusion");
+    if (!s->keep_lxqt)
+        lxp_theme_set_string(theme, "LXQt", "theme", name);
+    lxp_theme_set_string(theme, "LXQt", "style", s->style && *s->style ? s->style : "Fusion");
     lxp_theme_set_string(theme, "LXQt", "icon_follow_color_scheme", "true");
     lxp_theme_remove_group(theme, "LXQt Palette");
     for (gsize i = 0; i < G_N_ELEMENTS(palette); i++) {
@@ -337,12 +366,17 @@ static void set_theme_keys(LxpTheme *theme, const char *name, const LxpScheme *s
         lxp_theme_set_string(theme, "LXQt Palette", palette[i].key, v);
     }
 
-    lxp_theme_set_string(theme, "Openbox", "theme", name);
-    lxp_theme_set_string(theme, "GTK", "theme", name);
+    if (!s->keep_openbox)
+        lxp_theme_set_string(theme, "Openbox", "theme", name);
+    if (!s->keep_gtk)
+        lxp_theme_set_string(theme, "GTK", "theme", name);
     lxp_theme_set_string(theme, "GTK", "prefer_dark", c->dark ? "true" : "false");
 
-    lxp_theme_set_string(theme, "Panel", "background-color", QCOLOR_DEFAULT);
-    lxp_theme_set_string(theme, "Panel", "font-color", QCOLOR_DEFAULT);
+    /* the generated LXQt theme styles the panel */
+    if (!s->keep_lxqt) {
+        lxp_theme_set_string(theme, "Panel", "background-color", QCOLOR_DEFAULT);
+        lxp_theme_set_string(theme, "Panel", "font-color", QCOLOR_DEFAULT);
+    }
 
     if (s->font && *s->font) {
         static const char *const places[] = {
@@ -408,16 +442,23 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
 
     ok = remove_stale_units(dir, "themes", name, error) &&
          remove_stale_units(dir, "lxqt/themes", name, error) &&
-         lxp_remove_tree(themes_dir, error) && lxp_remove_tree(lxqt_dir, error) &&
-         write_marker(themes_dir, error) &&
-         write_template("index.theme", vars, themes_dir, "index.theme", error) &&
-         write_template("themerc", vars, themes_dir, "openbox-3/themerc", error) &&
-         write_gtk_css(3, name, &c, vars, themes_dir, error) &&
-         write_gtk_css(4, name, &c, vars, themes_dir, error) &&
-         write_marker(lxqt_dir, error) &&
-         write_template("lxqt-panel.qss", vars, lxqt_dir, "lxqt-panel.qss", error) &&
-         write_template("lxqt-runner.qss", vars, lxqt_dir, "lxqt-runner.qss", error) &&
-         write_template("lxqt-notificationd.qss", vars, lxqt_dir, "lxqt-notificationd.qss", error);
+         lxp_remove_tree(themes_dir, error) && lxp_remove_tree(lxqt_dir, error);
+
+    /* themes/<name> holds the Openbox and GTK parts */
+    if (ok && (!s.keep_openbox || !s.keep_gtk))
+        ok = write_marker(themes_dir, error) &&
+             write_template("index.theme", vars, themes_dir, "index.theme", error);
+    if (ok && !s.keep_openbox)
+        ok = write_template("themerc", vars, themes_dir, "openbox-3/themerc", error);
+    if (ok && !s.keep_gtk)
+        ok = write_gtk_css(3, name, &c, vars, themes_dir, error) &&
+             write_gtk_css(4, name, &c, vars, themes_dir, error);
+    if (ok && !s.keep_lxqt)
+        ok = write_marker(lxqt_dir, error) &&
+             write_template("lxqt-panel.qss", vars, lxqt_dir, "lxqt-panel.qss", error) &&
+             write_template("lxqt-runner.qss", vars, lxqt_dir, "lxqt-runner.qss", error) &&
+             write_template("lxqt-notificationd.qss", vars, lxqt_dir,
+                            "lxqt-notificationd.qss", error);
 
     if (ok)
         set_theme_keys(theme, name, &s, &c);

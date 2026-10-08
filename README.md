@@ -84,9 +84,19 @@ keep it; **Apply** applies it; the header bar creates a new theme, saves
 the current desktop as a theme and undoes the last change.
 
 **Import Theme…** (Ctrl+O, in the menu) and **Export…** share themes as
-packs. **New Theme** (Ctrl+N) and **Edit Colors…** open the editor: presets,
-color pickers, font, icons, wallpaper and panel options, contrast warnings
-and a live preview of the generated theme.
+packs. **New Theme** (Ctrl+N) and **Edit Colors…** open the editor, with a
+live preview:
+
+- **Colors** — presets, the scheme colors, contrast warnings;
+- **Appearance** — window (Openbox) theme and title buttons, GTK theme,
+  LXQt theme, Qt widget style, icons, font, cursor theme and size;
+- **Desktop** — wallpaper, panel position, size and opacity;
+- **Effects** — corner radius, shadows, shadow strength, fading (picom).
+
+The window, GTK and LXQt themes are either *Generated from colors* or an
+installed theme; the choice is stored as `generate=` in `[Scheme]`, so
+`lxp generate` keeps installed choices. Fusion is the widget style that
+follows the colors everywhere; others (kvantum, Breeze…) use their own.
 
 Changes are made by running `lxp` in a separate process, so a try still
 reverts if the application crashes or is closed.

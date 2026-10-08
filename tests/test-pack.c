@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "lxp-apply.h"
 #include "lxp-assets.h"
+#include "lxp-catalog.h"
 #include "lxp-error.h"
 #include "lxp-ini.h"
 #include "lxp-pack.h"
@@ -265,6 +266,46 @@ static void test_check_all(void)
     g_assert_true(g_str_has_prefix(((GError *)problems->pdata[1])->message, "cursor: "));
 }
 
+static gboolean listed(GPtrArray *names, const char *name)
+{
+    return g_ptr_array_find_with_equal_func(names, name, g_str_equal, NULL);
+}
+
+static void test_catalog(void)
+{
+    const char *data = g_get_user_data_dir();
+    g_autoptr(GPtrArray) openbox = NULL, gtk = NULL, lxqt = NULL, cursors = NULL, styles = NULL;
+
+    write_file(data, "themes/Boxy/openbox-3/themerc", "");
+    write_file(g_get_home_dir(), ".themes/Legacy/openbox-3/themerc", "");
+    write_file(data, "themes/Keys/gtk-3.0/gtk-keys.css", "");     /* key bindings only */
+    write_file(data, "themes/Real/gtk-3.0/gtk.css", "");
+    write_file(data, "themes/lxp-generated/openbox-3/themerc", "");
+    write_file(data, "lxqt/themes/Frosty/lxqt-panel.qss", "");
+    write_file(data, "lxqt/themes/.hidden/lxqt-panel.qss", "");
+    write_file(data, "lxqt/themes/backup.zip", "");
+    write_file(data, "icons/Pointy/cursors/left_ptr", "");
+    write_file(data, "icons/OnlyIcons/index.theme", "");
+
+    openbox = lxp_catalog_list(LXP_CATALOG_OPENBOX);
+    g_assert_true(listed(openbox, "Boxy"));
+    g_assert_true(listed(openbox, "Legacy"));
+    g_assert_false(listed(openbox, "lxp-generated"));
+    gtk = lxp_catalog_list(LXP_CATALOG_GTK);
+    g_assert_true(listed(gtk, "Real"));
+    g_assert_true(listed(gtk, "Adwaita"));
+    g_assert_false(listed(gtk, "Keys"));
+    lxqt = lxp_catalog_list(LXP_CATALOG_LXQT);
+    g_assert_true(listed(lxqt, "Frosty"));
+    g_assert_false(listed(lxqt, ".hidden"));
+    g_assert_false(listed(lxqt, "backup.zip"));
+    cursors = lxp_catalog_list(LXP_CATALOG_CURSORS);
+    g_assert_true(listed(cursors, "Pointy"));
+    g_assert_false(listed(cursors, "OnlyIcons"));
+    styles = lxp_catalog_list(LXP_CATALOG_QT_STYLES);
+    g_assert_true(listed(styles, "Fusion"));
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
@@ -274,5 +315,6 @@ int main(int argc, char **argv)
     g_test_add_func("/pack/asset-kinds", test_asset_kinds);
     g_test_add_func("/pack/ini-injection", test_ini_injection);
     g_test_add_func("/pack/check-all", test_check_all);
+    g_test_add_func("/pack/catalog", test_catalog);
     return g_test_run();
 }

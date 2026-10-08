@@ -2,13 +2,19 @@
 #include "lxp-editor.h"
 
 #include "lxp-apply.h"
+#include "lxp-catalog.h"
 #include "lxp-fileutil.h"
 #include "lxp-icons.h"
 #include "lxp-paths.h"
 #include "lxp-preview-area.h"
 #include "lxp-scheme.h"
 
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
 #define PREVIEW_DELAY_MS 120
+#define GENERATED_LABEL  "Generated from colors"
 
 static const char *const wallpaper_modes[] = {
     "zoom", "fit", "stretch", "center", "tile", "color", NULL,
@@ -33,6 +39,17 @@ typedef struct {
     GtkWidget *button;
 } OptionalColor;
 
+/*
+ * A dropdown of installed names, optionally led by "Generated from
+ * colors" (which reads back as NULL).
+ */
+typedef struct {
+    GtkWidget *dropdown;
+    GtkStringList *model;
+    GPtrArray *names;        /* names, in model order after the optional first row */
+    gboolean has_generated;
+} Choice;
+
 typedef struct {
     GtkWidget *window;
     char *dir;               /* theme being edited, NULL for a new one */
@@ -43,26 +60,47 @@ typedef struct {
     guint preview_timer;
     gboolean loading;        /* suppress updates while filling the form */
 
+    /* Colors */
     GtkWidget *name;
     GtkWidget *background, *surface, *foreground, *accent;
     OptionalColor accent_text, title, panel_color;
+    GtkWidget *warning;
+
+    /* Appearance */
+    Choice openbox, gtk, lxqt, style, icons, cursor;
+    GtkWidget *title_layout;
+    GtkWidget *cursor_size;
     GtkWidget *font;
-    GtkWidget *icons;
-    GPtrArray *icon_names;
+
+    /* Desktop */
     GtkWidget *wallpaper_label;
     char *wallpaper;
     GtkWidget *wallpaper_mode;
     GtkWidget *panel_position;
     GtkWidget *panel_size;
+    GtkWidget *panel_opacity;
+
+    /* Effects */
     GtkWidget *corner_radius;
     GtkWidget *shadows;
-    GtkWidget *warning;
+    GtkWidget *shadow_strength;
+    GtkWidget *fading;
+
     GtkWidget *preview;
     GtkWidget *error;
 } Editor;
 
+static void choice_clear(Choice *c)
+{
+    g_clear_pointer(&c->names, g_ptr_array_unref);
+    g_clear_object(&c->model);
+}
+
 static void editor_free(Editor *ed)
 {
+    Choice *choices[] = { &ed->openbox, &ed->gtk, &ed->lxqt, &ed->style,
+                          &ed->icons, &ed->cursor };
+
     g_clear_handle_id(&ed->preview_timer, g_source_remove);
     if (ed->work_dir)
         lxp_remove_tree(ed->work_dir, NULL);
@@ -70,8 +108,61 @@ static void editor_free(Editor *ed)
     g_free(ed->dir);
     g_free(ed->wallpaper);
     lxp_theme_free(ed->theme);
-    g_clear_pointer(&ed->icon_names, g_ptr_array_unref);
+    for (gsize i = 0; i < G_N_ELEMENTS(choices); i++)
+        choice_clear(choices[i]);
     g_free(ed);
+}
+
+/* --- choices ------------------------------------------------------------ */
+
+static void on_changed(GObject *object, GParamSpec *pspec, gpointer data);
+
+static void choice_init(Editor *ed, Choice *c, GPtrArray *names, gboolean has_generated)
+{
+    g_autoptr(GtkExpression) expression =
+        gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, NULL, "string");
+
+    c->names = names;
+    c->has_generated = has_generated;
+    c->model = gtk_string_list_new(NULL);
+    if (has_generated)
+        gtk_string_list_append(c->model, GENERATED_LABEL);
+    for (guint i = 0; i < names->len; i++)
+        gtk_string_list_append(c->model, g_ptr_array_index(names, i));
+
+    c->dropdown = gtk_drop_down_new(G_LIST_MODEL(g_object_ref(c->model)), NULL);
+    gtk_drop_down_set_expression(GTK_DROP_DOWN(c->dropdown), expression);
+    gtk_drop_down_set_enable_search(GTK_DROP_DOWN(c->dropdown), names->len > 8);
+    g_signal_connect(c->dropdown, "notify::selected", G_CALLBACK(on_changed), ed);
+}
+
+/* Selected name, or NULL for "Generated from colors" / nothing. */
+static const char *choice_get(const Choice *c)
+{
+    guint i = gtk_drop_down_get_selected(GTK_DROP_DOWN(c->dropdown));
+
+    if (i == GTK_INVALID_LIST_POSITION || (c->has_generated && i == 0))
+        return NULL;
+    i -= c->has_generated ? 1 : 0;
+    return i < c->names->len ? g_ptr_array_index(c->names, i) : NULL;
+}
+
+/* Select <name>; unknown names (e.g. not installed here) are added. */
+static void choice_set(Choice *c, const char *name)
+{
+    guint index;
+    guint offset = c->has_generated ? 1 : 0;
+
+    if (!name) {
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(c->dropdown), 0);
+        return;
+    }
+    if (!g_ptr_array_find_with_equal_func(c->names, name, g_str_equal, &index)) {
+        g_ptr_array_add(c->names, g_strdup(name));
+        gtk_string_list_append(c->model, name);
+        index = c->names->len - 1;
+    }
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(c->dropdown), index + offset);
 }
 
 /* --- form <-> values ---------------------------------------------------- */
@@ -120,6 +211,20 @@ static int string_index(const char *const *list, const char *value)
     return 0;
 }
 
+static int spin_value(GtkWidget *spin)
+{
+    return gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(spin));
+}
+
+/* Openbox title layout: letters from NDSLIMC, each at most once. */
+static gboolean valid_title_layout(const char *layout)
+{
+    for (const char *p = layout; *p; p++)
+        if (!strchr("NDSLIMC", *p) || strchr(p + 1, *p))
+            return FALSE;
+    return TRUE;
+}
+
 static void read_form(Editor *ed, LxpScheme *s)
 {
     PangoFontDescription *font =
@@ -134,41 +239,68 @@ static void read_form(Editor *ed, LxpScheme *s)
     s->has_title = get_optional(&ed->title, &s->title);
     s->has_panel = get_optional(&ed->panel_color, &s->panel);
     s->font = font ? pango_font_description_to_string(font) : NULL;
+    s->style = g_strdup(choice_get(&ed->style));
+    s->keep_openbox = choice_get(&ed->openbox) != NULL;
+    s->keep_gtk = choice_get(&ed->gtk) != NULL;
+    s->keep_lxqt = choice_get(&ed->lxqt) != NULL;
+}
+
+static void set_int(LxpTheme *theme, const char *group, const char *key, int value)
+{
+    g_autofree char *text = g_strdup_printf("%d", value);
+    lxp_theme_set_string(theme, group, key, text);
 }
 
 /* Copy the form into the working theme (everything except generation). */
 static void update_theme(Editor *ed)
 {
     LxpScheme s;
+    LxpTheme *t = ed->theme;
     const char *name = gtk_editable_get_text(GTK_EDITABLE(ed->name));
-    guint icon = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->icons));
+    const char *layout = gtk_editable_get_text(GTK_EDITABLE(ed->title_layout));
     guint mode = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->wallpaper_mode));
     guint position = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->panel_position));
-    g_autofree char *size = g_strdup_printf("%d",
-        gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ed->panel_size)));
+    const char *value;
+    char opacity[G_ASCII_DTOSTR_BUF_SIZE];
 
     read_form(ed, &s);
-    lxp_scheme_save(&s, ed->theme);
+    lxp_scheme_save(&s, t);
     lxp_scheme_clear(&s);
 
-    lxp_theme_set_string(ed->theme, LXP_THEME_GROUP, "Name", *name ? name : "Untitled");
-    if (icon != GTK_INVALID_LIST_POSITION && icon < ed->icon_names->len) {
-        const char *icons = g_ptr_array_index(ed->icon_names, icon);
-        lxp_theme_set_string(ed->theme, "LXQt", "icon_theme", icons);
-        lxp_theme_set_string(ed->theme, "GTK", "icon_theme", icons);
-    }
-    lxp_theme_set_string(ed->theme, "Wallpaper", "file", ed->wallpaper);
-    lxp_theme_set_string(ed->theme, "Wallpaper", "mode", wallpaper_modes[mode]);
-    lxp_theme_set_string(ed->theme, "Panel", "position", panel_positions[position]);
-    lxp_theme_set_string(ed->theme, "Panel", "panelSize", size);
+    lxp_theme_set_string(t, LXP_THEME_GROUP, "Name", *name ? name : "Untitled");
 
-    {
-        g_autofree char *radius = g_strdup_printf("%d",
-            gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ed->corner_radius)));
-        lxp_theme_set_string(ed->theme, "Compositor", "corner_radius", radius);
-        lxp_theme_set_string(ed->theme, "Compositor", "shadow",
-                             gtk_switch_get_active(GTK_SWITCH(ed->shadows)) ? "true" : "false");
+    /* installed themes chosen instead of generated ones */
+    if ((value = choice_get(&ed->openbox)))
+        lxp_theme_set_string(t, "Openbox", "theme", value);
+    if ((value = choice_get(&ed->gtk)))
+        lxp_theme_set_string(t, "GTK", "theme", value);
+    if ((value = choice_get(&ed->lxqt)))
+        lxp_theme_set_string(t, "LXQt", "theme", value);
+    if (*layout && valid_title_layout(layout))
+        lxp_theme_set_string(t, "Openbox", "title_layout", layout);
+
+    if ((value = choice_get(&ed->icons))) {
+        lxp_theme_set_string(t, "LXQt", "icon_theme", value);
+        lxp_theme_set_string(t, "GTK", "icon_theme", value);
     }
+    if ((value = choice_get(&ed->cursor)))
+        lxp_theme_set_string(t, "Cursor", "theme", value);
+    set_int(t, "Cursor", "size", spin_value(ed->cursor_size));
+
+    lxp_theme_set_string(t, "Wallpaper", "file", ed->wallpaper);
+    lxp_theme_set_string(t, "Wallpaper", "mode", wallpaper_modes[mode]);
+    lxp_theme_set_string(t, "Panel", "position", panel_positions[position]);
+    set_int(t, "Panel", "panelSize", spin_value(ed->panel_size));
+    set_int(t, "Panel", "opacity", spin_value(ed->panel_opacity));
+
+    set_int(t, "Compositor", "corner_radius", spin_value(ed->corner_radius));
+    lxp_theme_set_string(t, "Compositor", "shadow",
+                         gtk_switch_get_active(GTK_SWITCH(ed->shadows)) ? "true" : "false");
+    g_ascii_formatd(opacity, sizeof(opacity), "%.2f",
+                    gtk_range_get_value(GTK_RANGE(ed->shadow_strength)) / 100.0);
+    lxp_theme_set_string(t, "Compositor", "shadow_opacity", opacity);
+    lxp_theme_set_string(t, "Compositor", "fading",
+                         gtk_switch_get_active(GTK_SWITCH(ed->fading)) ? "true" : "false");
 }
 
 /* Automatic colors show the value that will actually be used. */
@@ -198,6 +330,8 @@ static void update_warning(Editor *ed)
     LxpScheme s;
     LxpSchemeColors c;
     GString *text = g_string_new(NULL);
+    const char *layout = gtk_editable_get_text(GTK_EDITABLE(ed->title_layout));
+    const char *style = choice_get(&ed->style);
 
     read_form(ed, &s);
     lxp_scheme_derive(&s, &c);
@@ -209,6 +343,11 @@ static void update_warning(Editor *ed)
         g_string_append(text, "Text on the accent color is hard to read. ");
     if (lxp_color_contrast(&c.title_active_fg, &c.title_active) < 3)
         g_string_append(text, "Title bar text is hard to read. ");
+    if (*layout && !valid_title_layout(layout))
+        g_string_append(text, "Title buttons: use the letters N D S L I M C, each once. ");
+    if (style && g_ascii_strcasecmp(style, "Fusion") != 0)
+        g_string_append_printf(text, "The %s widget style uses its own colors in Qt "
+                                     "applications. ", style);
     lxp_scheme_clear(&s);
 
     gtk_label_set_text(GTK_LABEL(ed->warning), text->str);
@@ -256,6 +395,11 @@ static void on_changed(GObject *object, GParamSpec *pspec, gpointer data)
 }
 
 static void on_editable_changed(GtkEditable *editable, gpointer data)
+{
+    schedule_preview(data);
+}
+
+static void on_value_changed(GObject *object, gpointer data)
 {
     schedule_preview(data);
 }
@@ -397,6 +541,15 @@ static GtkWidget *section(const char *title)
     return label;
 }
 
+static GtkWidget *new_grid(void)
+{
+    GtkWidget *grid = gtk_grid_new();
+
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
+    return grid;
+}
+
 static GtkWidget *color_button(Editor *ed)
 {
     GtkWidget *button = gtk_color_dialog_button_new(gtk_color_dialog_new());
@@ -433,22 +586,50 @@ static void optional_row(Editor *ed, GtkWidget *grid, int row, const char *label
     attach_row(grid, row, label, o->button, o->automatic);
 }
 
-static GtkWidget *build_form(Editor *ed)
+static GtkWidget *spin(Editor *ed, double min, double max, double step, const char *tooltip)
 {
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
-    GtkWidget *colors = gtk_grid_new();
-    GtkWidget *optional = gtk_grid_new();
-    GtkWidget *looks = gtk_grid_new();
-    GtkWidget *preset_box = gtk_flow_box_new();
-    GtkWidget *wallpaper_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    GtkWidget *choose = gtk_button_new_with_label("Choose…");
-    g_autoptr(GtkStringList) icon_model = gtk_string_list_new(NULL);
-    GtkWidget *grids[] = { colors, optional, looks };
+    GtkWidget *s = gtk_spin_button_new_with_range(min, max, step);
 
-    for (gsize i = 0; i < G_N_ELEMENTS(grids); i++) {
-        gtk_grid_set_row_spacing(GTK_GRID(grids[i]), 6);
-        gtk_grid_set_column_spacing(GTK_GRID(grids[i]), 12);
-    }
+    if (tooltip)
+        gtk_widget_set_tooltip_text(s, tooltip);
+    g_signal_connect(s, "value-changed", G_CALLBACK(on_value_changed), ed);
+    return s;
+}
+
+static GtkWidget *toggle(Editor *ed, const char *tooltip)
+{
+    GtkWidget *s = gtk_switch_new();
+
+    gtk_widget_set_halign(s, GTK_ALIGN_END);
+    gtk_widget_set_valign(s, GTK_ALIGN_CENTER);
+    if (tooltip)
+        gtk_widget_set_tooltip_text(s, tooltip);
+    g_signal_connect(s, "notify::active", G_CALLBACK(on_changed), ed);
+    return s;
+}
+
+/* A notebook page: a scrollable column of widgets. */
+static GtkWidget *page(GtkWidget *notebook, const char *title)
+{
+    GtkWidget *scroller = gtk_scrolled_window_new();
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+
+    gtk_widget_set_margin_top(box, 6);
+    gtk_widget_set_margin_bottom(box, 18);
+    gtk_widget_set_margin_start(box, 18);
+    gtk_widget_set_margin_end(box, 18);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scroller, gtk_label_new(title));
+    return box;
+}
+
+static void build_colors_page(Editor *ed, GtkWidget *box)
+{
+    GtkWidget *colors = new_grid();
+    GtkWidget *optional = new_grid();
+    GtkWidget *preset_box = gtk_flow_box_new();
 
     ed->name = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(ed->name), "Theme name");
@@ -488,77 +669,155 @@ static GtkWidget *build_form(Editor *ed)
     gtk_label_set_xalign(GTK_LABEL(ed->warning), 0);
     gtk_widget_add_css_class(ed->warning, "warning");
     gtk_box_append(GTK_BOX(box), ed->warning);
+}
 
-    gtk_box_append(GTK_BOX(box), section("Look"));
+static void build_appearance_page(Editor *ed, GtkWidget *box)
+{
+    GtkWidget *windows = new_grid();
+    GtkWidget *apps = new_grid();
+    GtkWidget *pointer = new_grid();
+
+    gtk_box_append(GTK_BOX(box), section("Windows"));
+    choice_init(ed, &ed->openbox, lxp_catalog_list(LXP_CATALOG_OPENBOX), TRUE);
+    gtk_widget_set_tooltip_text(ed->openbox.dropdown, "Openbox title bars and borders");
+    attach_row(windows, 0, "Window theme", ed->openbox.dropdown, NULL);
+    ed->title_layout = gtk_entry_new();
+    gtk_entry_set_max_length(GTK_ENTRY(ed->title_layout), 7);
+    gtk_editable_set_width_chars(GTK_EDITABLE(ed->title_layout), 9);
+    gtk_widget_set_tooltip_text(ed->title_layout,
+                                "Title bar layout: N icon, L title, I minimize, M maximize, "
+                                "C close, S shade, D all desktops");
+    g_signal_connect(ed->title_layout, "changed", G_CALLBACK(on_editable_changed), ed);
+    attach_row(windows, 1, "Title buttons", ed->title_layout, NULL);
+    gtk_box_append(GTK_BOX(box), windows);
+
+    gtk_box_append(GTK_BOX(box), section("Applications"));
+    choice_init(ed, &ed->gtk, lxp_catalog_list(LXP_CATALOG_GTK), TRUE);
+    gtk_widget_set_tooltip_text(ed->gtk.dropdown, "Theme of GTK applications");
+    attach_row(apps, 0, "GTK theme", ed->gtk.dropdown, NULL);
+    choice_init(ed, &ed->lxqt, lxp_catalog_list(LXP_CATALOG_LXQT), TRUE);
+    gtk_widget_set_tooltip_text(ed->lxqt.dropdown, "Panel, menu, runner and notifications");
+    attach_row(apps, 1, "LXQt theme", ed->lxqt.dropdown, NULL);
+    choice_init(ed, &ed->style, lxp_catalog_list(LXP_CATALOG_QT_STYLES), FALSE);
+    gtk_widget_set_tooltip_text(ed->style.dropdown, "Widget style of Qt applications; "
+                                                    "Fusion follows the colors");
+    attach_row(apps, 2, "Widget style", ed->style.dropdown, NULL);
+    choice_init(ed, &ed->icons, lxp_icon_themes_list(), FALSE);
+    attach_row(apps, 3, "Icons", ed->icons.dropdown, NULL);
     ed->font = gtk_font_dialog_button_new(gtk_font_dialog_new());
-    gtk_font_dialog_button_set_level(GTK_FONT_DIALOG_BUTTON(ed->font),
-                                     GTK_FONT_LEVEL_FONT);
+    gtk_font_dialog_button_set_level(GTK_FONT_DIALOG_BUTTON(ed->font), GTK_FONT_LEVEL_FONT);
     g_signal_connect(ed->font, "notify::font-desc", G_CALLBACK(on_changed), ed);
-    attach_row(looks, 0, "Font", ed->font, NULL);
+    attach_row(apps, 4, "Font", ed->font, NULL);
+    gtk_box_append(GTK_BOX(box), apps);
 
-    ed->icon_names = lxp_icon_themes_list();
-    for (guint i = 0; i < ed->icon_names->len; i++)
-        gtk_string_list_append(icon_model, g_ptr_array_index(ed->icon_names, i));
-    ed->icons = gtk_drop_down_new(G_LIST_MODEL(g_object_ref(icon_model)), NULL);
-    g_signal_connect(ed->icons, "notify::selected", G_CALLBACK(on_changed), ed);
-    attach_row(looks, 1, "Icons", ed->icons, NULL);
+    gtk_box_append(GTK_BOX(box), section("Pointer"));
+    choice_init(ed, &ed->cursor, lxp_catalog_list(LXP_CATALOG_CURSORS), FALSE);
+    attach_row(pointer, 0, "Cursor theme", ed->cursor.dropdown, NULL);
+    ed->cursor_size = spin(ed, 16, 96, 2, "Takes full effect at the next login");
+    attach_row(pointer, 1, "Cursor size", ed->cursor_size, NULL);
+    gtk_box_append(GTK_BOX(box), pointer);
+}
 
+static void build_desktop_page(Editor *ed, GtkWidget *box)
+{
+    GtkWidget *wallpaper = new_grid();
+    GtkWidget *panel = new_grid();
+    GtkWidget *wallpaper_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    GtkWidget *choose = gtk_button_new_with_label("Choose…");
+
+    gtk_box_append(GTK_BOX(box), section("Wallpaper"));
     ed->wallpaper_label = gtk_label_new("None");
     gtk_label_set_ellipsize(GTK_LABEL(ed->wallpaper_label), PANGO_ELLIPSIZE_MIDDLE);
     gtk_label_set_max_width_chars(GTK_LABEL(ed->wallpaper_label), 18);
     g_signal_connect(choose, "clicked", G_CALLBACK(choose_wallpaper), ed);
     gtk_box_append(GTK_BOX(wallpaper_row), ed->wallpaper_label);
     gtk_box_append(GTK_BOX(wallpaper_row), choose);
-    attach_row(looks, 2, "Wallpaper", wallpaper_row, NULL);
-
+    attach_row(wallpaper, 0, "Image", wallpaper_row, NULL);
     ed->wallpaper_mode = gtk_drop_down_new_from_strings(wallpaper_modes);
     g_signal_connect(ed->wallpaper_mode, "notify::selected", G_CALLBACK(on_changed), ed);
-    attach_row(looks, 3, "Wallpaper mode", ed->wallpaper_mode, NULL);
+    attach_row(wallpaper, 1, "Fit", ed->wallpaper_mode, NULL);
+    gtk_box_append(GTK_BOX(box), wallpaper);
 
+    gtk_box_append(GTK_BOX(box), section("Panel"));
     ed->panel_position = gtk_drop_down_new_from_strings(panel_positions);
     g_signal_connect(ed->panel_position, "notify::selected", G_CALLBACK(on_changed), ed);
-    attach_row(looks, 4, "Panel position", ed->panel_position, NULL);
+    attach_row(panel, 0, "Position", ed->panel_position, NULL);
+    ed->panel_size = spin(ed, 16, 96, 2, NULL);
+    attach_row(panel, 1, "Size", ed->panel_size, NULL);
+    ed->panel_opacity = spin(ed, 0, 100, 5, "Percent; 100 is fully opaque");
+    attach_row(panel, 2, "Opacity (%)", ed->panel_opacity, NULL);
+    gtk_box_append(GTK_BOX(box), panel);
+}
 
-    ed->panel_size = gtk_spin_button_new_with_range(16, 96, 2);
-    g_signal_connect(ed->panel_size, "value-changed", G_CALLBACK(on_editable_changed), ed);
-    attach_row(looks, 5, "Panel size", ed->panel_size, NULL);
+static void build_effects_page(Editor *ed, GtkWidget *box)
+{
+    GtkWidget *grid = new_grid();
+    GtkWidget *note = gtk_label_new("Drawn by the picom compositor, which must be "
+                                    "running. Menus and the panel stay square.");
 
-    ed->corner_radius = gtk_spin_button_new_with_range(0, 32, 1);
-    gtk_widget_set_tooltip_text(ed->corner_radius, "Drawn by the picom compositor");
-    g_signal_connect(ed->corner_radius, "value-changed", G_CALLBACK(on_editable_changed), ed);
-    attach_row(looks, 6, "Window corners", ed->corner_radius, NULL);
+    gtk_box_append(GTK_BOX(box), section("Windows"));
+    ed->corner_radius = spin(ed, 0, 32, 1, NULL);
+    attach_row(grid, 0, "Corner radius", ed->corner_radius, NULL);
+    ed->shadows = toggle(ed, NULL);
+    attach_row(grid, 1, "Shadows", ed->shadows, NULL);
+    ed->shadow_strength = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 100, 5);
+    gtk_widget_set_size_request(ed->shadow_strength, 160, -1);
+    gtk_scale_set_draw_value(GTK_SCALE(ed->shadow_strength), TRUE);
+    gtk_scale_set_digits(GTK_SCALE(ed->shadow_strength), 0);
+    gtk_scale_set_value_pos(GTK_SCALE(ed->shadow_strength), GTK_POS_LEFT);
+    g_signal_connect(ed->shadow_strength, "value-changed", G_CALLBACK(on_value_changed), ed);
+    attach_row(grid, 2, "Shadow strength", ed->shadow_strength, NULL);
+    ed->fading = toggle(ed, "Fade windows in and out");
+    attach_row(grid, 3, "Fading", ed->fading, NULL);
+    gtk_box_append(GTK_BOX(box), grid);
 
-    ed->shadows = gtk_switch_new();
-    gtk_widget_set_halign(ed->shadows, GTK_ALIGN_END);
-    gtk_widget_set_tooltip_text(ed->shadows, "Drawn by the picom compositor");
-    g_signal_connect(ed->shadows, "notify::active", G_CALLBACK(on_changed), ed);
-    attach_row(looks, 7, "Window shadows", ed->shadows, NULL);
-    gtk_box_append(GTK_BOX(box), looks);
+    gtk_label_set_wrap(GTK_LABEL(note), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(note), 0);
+    gtk_widget_add_css_class(note, "dim-label");
+    gtk_widget_set_margin_top(note, 12);
+    gtk_box_append(GTK_BOX(box), note);
+}
 
-    gtk_widget_set_margin_top(box, 6);
-    gtk_widget_set_margin_bottom(box, 18);
-    gtk_widget_set_margin_start(box, 18);
-    gtk_widget_set_margin_end(box, 18);
-    return box;
+static GtkWidget *build_form(Editor *ed)
+{
+    GtkWidget *notebook = gtk_notebook_new();
+
+    build_colors_page(ed, page(notebook, "Colors"));
+    build_appearance_page(ed, page(notebook, "Appearance"));
+    build_desktop_page(ed, page(notebook, "Desktop"));
+    build_effects_page(ed, page(notebook, "Effects"));
+    return notebook;
+}
+
+static gboolean is_generated(const char *name)
+{
+    return !name || g_str_has_prefix(name, "lxp-");
 }
 
 /* Fill the form from the working theme. */
 static void load_form(Editor *ed)
 {
     g_autoptr(LxpPreviewModel) model = lxp_preview_model_new(ed->theme);
-    g_autofree char *icons = lxp_theme_get_string(ed->theme, "LXQt", "icon_theme");
-    g_autofree char *mode = lxp_theme_get_string(ed->theme, "Wallpaper", "mode");
-    g_autofree char *position = lxp_theme_get_string(ed->theme, "Panel", "position");
+    LxpTheme *t = ed->theme;
+    g_autofree char *openbox = lxp_theme_get_string(t, "Openbox", "theme");
+    g_autofree char *layout = lxp_theme_get_string(t, "Openbox", "title_layout");
+    g_autofree char *gtk = lxp_theme_get_string(t, "GTK", "theme");
+    g_autofree char *lxqt = lxp_theme_get_string(t, "LXQt", "theme");
+    g_autofree char *style = lxp_theme_get_string(t, "LXQt", "style");
+    g_autofree char *icons = lxp_theme_get_string(t, "LXQt", "icon_theme");
+    g_autofree char *cursor = lxp_theme_get_string(t, "Cursor", "theme");
+    g_autofree char *cursor_size = lxp_theme_get_string(t, "Cursor", "size");
+    g_autofree char *mode = lxp_theme_get_string(t, "Wallpaper", "mode");
+    g_autofree char *position = lxp_theme_get_string(t, "Panel", "position");
+    g_autofree char *fading = lxp_theme_get_string(t, "Compositor", "fading");
     LxpScheme s;
     LxpSchemeColors c;
-    guint index = 0;
 
     ed->loading = TRUE;
-    gtk_editable_set_text(GTK_EDITABLE(ed->name),
-                          ed->dir ? lxp_theme_get_name(ed->theme) : "");
+    gtk_editable_set_text(GTK_EDITABLE(ed->name), ed->dir ? lxp_theme_get_name(t) : "");
 
     /* The theme's own scheme, else its palette, else what the preview shows. */
-    if (!lxp_scheme_load(ed->theme, &s, NULL) && !lxp_scheme_from_palette(ed->theme, &s)) {
+    if (!lxp_scheme_load(t, &s, NULL) && !lxp_scheme_from_palette(t, &s)) {
         memset(&s, 0, sizeof(s));
         s.background = model->window;
         s.surface = model->base;
@@ -580,18 +839,39 @@ static void load_form(Editor *ed)
         gtk_font_dialog_button_set_font_desc(GTK_FONT_DIALOG_BUTTON(ed->font), font);
         pango_font_description_free(font);
     }
+
+    /*
+     * A new theme generates its window, GTK and LXQt themes from the
+     * colors and uses Fusion, so color changes show everywhere. An edited
+     * theme keeps its choices.
+     */
+    choice_set(&ed->openbox, !ed->dir || is_generated(openbox) ? NULL : openbox);
+    choice_set(&ed->gtk, !ed->dir || is_generated(gtk) ? NULL : gtk);
+    choice_set(&ed->lxqt, !ed->dir || is_generated(lxqt) ? NULL : lxqt);
+    choice_set(&ed->style, ed->dir && (s.style || style) ? (s.style ? s.style : style)
+                                                        : "Fusion");
+    gtk_editable_set_text(GTK_EDITABLE(ed->title_layout), layout ? layout : "NLIMC");
+    if (icons)
+        choice_set(&ed->icons, icons);
+    if (cursor)
+        choice_set(&ed->cursor, cursor);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->cursor_size),
+                              cursor_size ? g_ascii_strtod(cursor_size, NULL) : 24);
     lxp_scheme_clear(&s);
 
-    if (icons && g_ptr_array_find_with_equal_func(ed->icon_names, icons, g_str_equal, &index))
-        gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->icons), index);
     set_wallpaper(ed, model->wallpaper);
     gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->wallpaper_mode),
                                string_index(wallpaper_modes, mode ? mode : "zoom"));
     gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->panel_position),
                                string_index(panel_positions, position ? position : "Bottom"));
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->panel_size), model->panel_size);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->panel_opacity),
+                              round(model->panel_opacity * 100));
+
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->corner_radius), model->corner_radius);
     gtk_switch_set_active(GTK_SWITCH(ed->shadows), model->shadow);
+    gtk_range_set_value(GTK_RANGE(ed->shadow_strength), round(model->shadow_opacity * 100));
+    gtk_switch_set_active(GTK_SWITCH(ed->fading), fading && g_str_equal(fading, "true"));
     ed->loading = FALSE;
 }
 
@@ -605,7 +885,7 @@ void lxp_editor_open(GtkWindow *parent, const char *dir, LxpEditorSaved on_saved
     GtkWidget *cancel = gtk_button_new_with_mnemonic("_Cancel");
     GtkWidget *save_button = gtk_button_new_with_mnemonic("_Save");
     GtkWidget *paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    GtkWidget *scroller = gtk_scrolled_window_new();
+    GtkWidget *form = NULL;
     GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 
     ed->window = window;
@@ -628,7 +908,7 @@ void lxp_editor_open(GtkWindow *parent, const char *dir, LxpEditorSaved on_saved
     gtk_window_set_transient_for(GTK_WINDOW(window), parent);
     gtk_window_set_modal(GTK_WINDOW(window), TRUE);
     gtk_window_set_destroy_with_parent(GTK_WINDOW(window), TRUE);
-    gtk_window_set_default_size(GTK_WINDOW(window), 1180, 720);
+    gtk_window_set_default_size(GTK_WINDOW(window), 1220, 740);
 
     g_signal_connect_swapped(cancel, "clicked", G_CALLBACK(gtk_window_destroy), window);
     gtk_widget_add_css_class(save_button, "suggested-action");
@@ -638,10 +918,11 @@ void lxp_editor_open(GtkWindow *parent, const char *dir, LxpEditorSaved on_saved
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), save_button);
     gtk_window_set_titlebar(GTK_WINDOW(window), header);
 
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
-                                   GTK_POLICY_AUTOMATIC);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), build_form(ed));
-    gtk_widget_set_size_request(scroller, 340, -1);
+    form = build_form(ed);
+    gtk_widget_set_size_request(form, 380, -1);
+    /* developer hook for screenshots of each tab */
+    if (g_getenv("LXP_EDITOR_PAGE"))
+        gtk_notebook_set_current_page(GTK_NOTEBOOK(form), atoi(g_getenv("LXP_EDITOR_PAGE")));
 
     ed->preview = lxp_preview_area_new(720, 450);
     gtk_widget_set_hexpand(ed->preview, TRUE);
@@ -657,7 +938,7 @@ void lxp_editor_open(GtkWindow *parent, const char *dir, LxpEditorSaved on_saved
     gtk_box_append(GTK_BOX(right), ed->preview);
     gtk_box_append(GTK_BOX(right), ed->error);
 
-    gtk_paned_set_start_child(GTK_PANED(paned), scroller);
+    gtk_paned_set_start_child(GTK_PANED(paned), form);
     gtk_paned_set_end_child(GTK_PANED(paned), right);
     gtk_paned_set_shrink_start_child(GTK_PANED(paned), FALSE);
     gtk_paned_set_resize_start_child(GTK_PANED(paned), FALSE);

@@ -10,6 +10,12 @@
 
 #include <string.h>
 
+static gboolean exists_in(const char *dir, const char *rel)
+{
+    g_autofree char *path = g_build_filename(dir, rel, NULL);
+    return g_file_test(path, G_FILE_TEST_EXISTS);
+}
+
 static LxpColor C(const char *text)
 {
     LxpColor c;
@@ -316,6 +322,42 @@ static void test_rename_and_wallpaper(void)
     g_assert_cmpstr(value, ==, "wallpaper.png");
 }
 
+static void test_keep_installed(void)
+{
+    g_autoptr(LxpTheme) theme = nord_theme("Mixed");
+    g_autofree char *dir = g_build_filename(g_get_user_data_dir(), "mixed", NULL);
+    g_autoptr(GError) error = NULL;
+    g_autofree char *openbox = NULL, *gtk = NULL, *style = NULL, *generate = NULL;
+    LxpScheme s;
+
+    /* keep an installed window theme and widget style, generate the rest */
+    g_assert_true(lxp_scheme_load(theme, &s, &error));
+    s.keep_openbox = TRUE;
+    s.style = g_strdup("kvantum");
+    lxp_scheme_save(&s, theme);
+    lxp_scheme_clear(&s);
+    lxp_theme_set_string(theme, "Openbox", "theme", "Arrondie-Violet");
+
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    g_assert_no_error(error);
+    openbox = lxp_theme_get_string(theme, "Openbox", "theme");
+    gtk = lxp_theme_get_string(theme, "GTK", "theme");
+    style = lxp_theme_get_string(theme, "LXQt", "style");
+    generate = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "generate");
+    g_assert_cmpstr(openbox, ==, "Arrondie-Violet");
+    g_assert_cmpstr(gtk, ==, "lxp-mixed");
+    g_assert_cmpstr(style, ==, "kvantum");
+    g_assert_cmpstr(generate, ==, "gtk;lxqt;");
+    g_assert_false(exists_in(dir, "data/themes/lxp-mixed/openbox-3/themerc"));
+    g_assert_true(exists_in(dir, "data/themes/lxp-mixed/gtk-3.0/gtk.css"));
+
+    /* the choice survives a reload */
+    g_assert_true(lxp_scheme_load(theme, &s, &error));
+    g_assert_true(s.keep_openbox);
+    g_assert_false(s.keep_gtk);
+    lxp_scheme_clear(&s);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
@@ -327,5 +369,6 @@ int main(int argc, char **argv)
     g_test_add_func("/generate/assets", test_assets);
     g_test_add_func("/generate/apply", test_apply_generated);
     g_test_add_func("/generate/rename-and-wallpaper", test_rename_and_wallpaper);
+    g_test_add_func("/generate/keep-installed", test_keep_installed);
     return g_test_run();
 }

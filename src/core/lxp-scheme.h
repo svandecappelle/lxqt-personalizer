@@ -17,6 +17,12 @@
  *   title=#5e81ac          optional, active title bar (else neutral)
  *   panel=#242933          optional, panel background (else derived)
  *   font=Noto Sans 10      optional
+ *   style=kvantum          optional Qt widget style (default Fusion, which
+ *                          follows the palette everywhere)
+ *   generate=openbox;gtk;lxqt
+ *                          optional: which themes are generated from the
+ *                          colors (default all); for the others the
+ *                          theme keeps the installed theme it names
  */
 
 #define LXP_SCHEME_GROUP "Scheme"
@@ -26,6 +32,9 @@ typedef struct {
     LxpColor accent_text, title, panel;
     gboolean has_accent_text, has_title, has_panel;
     char    *font;
+    char    *style;
+    /* use the installed theme named in the theme instead of generating */
+    gboolean keep_openbox, keep_gtk, keep_lxqt;
 } LxpScheme;
 
 /* Every color the generated files use, derived from a scheme. */
