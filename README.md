@@ -22,6 +22,7 @@ Files are edited in place: only themed keys change, everything else
 Dependencies: CMake ≥ 3.20, a C11 compiler, GLib/GIO ≥ 2.76, libxml2,
 cairo, pango, gdk-pixbuf, librsvg ≥ 2.52, and GTK ≥ 4.12 for the
 application (`-DLXP_BUILD_GUI=OFF` builds only the library and `lxp`).
+Recoloring GTK themes uses `gresource` (part of GLib) at run time.
 
 ```sh
 cmake -S . -B build -G Ninja
@@ -30,20 +31,52 @@ ctest --test-dir build
 ./build/bin/lxqt-personalizer   # the application
 ```
 
+## Themes from a few colors
+
+A theme with a `[Scheme]` section is generated from four colors —
+background, surface (lists and fields), text and accent — plus optional
+accent text, title bar and panel colors and a font:
+
+```sh
+lxp new "Nord Night" --background '#2e3440' --surface '#3b4252' \
+        --foreground '#eceff4' --accent '#88c0d0' --font 'Noto Sans 10' \
+        --wallpaper ~/Pictures/mountains.jpg
+lxp generate nord-night      # after editing [Scheme] in theme.ini
+```
+
+This writes, inside the theme folder's `data/`:
+
+- an Openbox theme (`themes/lxp-<name>/openbox-3/themerc`);
+- GTK 3 and GTK 4 themes, made by recoloring the stylesheets of the
+  installed GTK so every widget follows the palette;
+- an LXQt theme (panel, runner and notification stylesheets);
+
+and sets the Qt palette, fonts and theme names in `theme.ini`. Applying the
+theme installs `data/` into `~/.local/share`, never over folders it did not
+create (they carry a `.lxp-asset` marker). Themes stay self-contained: the
+wallpaper is copied into the theme folder.
+
 ## Application
 
 `lxqt-personalizer` ("Desktop Themes") shows every installed theme with a
 live mockup of the desktop it produces — wallpaper, Openbox window
 decorations, Qt palette and fonts, icons, panel — next to the current
 desktop. **Try** applies a theme and reverts after 15 seconds unless you
-keep it; **Apply** applies it; the header bar saves the current desktop as
-a theme and undoes the last change.
+keep it; **Apply** applies it; the header bar creates a new theme, saves
+the current desktop as a theme and undoes the last change.
+
+**New Theme** (Ctrl+N) and **Edit Colors…** open the editor: presets,
+color pickers, font, icons, wallpaper and panel options, contrast warnings
+and a live preview of the generated theme.
 
 Changes are made by running `lxp` in a separate process, so a try still
 reverts if the application crashes or is closed.
 
 `LXP_SCREENSHOT=shot.png lxqt-personalizer` saves a screenshot of the window
-and quits.
+and quits; add `LXP_SCREENSHOT_ACTION=win.new-theme` to capture the editor.
+
+Rounded window corners and shadows come from a compositor such as picom,
+not from the Openbox theme: Openbox draws square frames.
 
 ## Usage
 
@@ -53,6 +86,8 @@ lxp capture "My Theme"       # save the current look as a theme
 lxp list                     # installed themes
 lxp show my-theme            # print a theme manifest
 lxp preview my-theme -o shot.png   # render the mockup (--current: this desktop)
+lxp new NAME --background … --surface … --foreground … --accent …
+lxp generate my-theme        # regenerate from [Scheme]
 lxp apply my-theme --try 15  # apply, revert unless confirmed within 15 s
 lxp apply my-theme --only openbox,cursor
 lxp reload                   # make running programs reread their config
@@ -79,6 +114,7 @@ in `~/.local/state/lxqt-personalizer/snapshots/`.
 ```
 src/core/           liblxp: theme model, snapshots, backends (no GUI)
 src/core/backends/  one file per desktop component
+src/core/templates/ Openbox, LXQt and GTK templates for generated themes
 src/preview/        mockup renderer (cairo/pango, no GTK), icon theme lookup
 src/cli/            the `lxp` command
 src/gui/            the GTK 4 application

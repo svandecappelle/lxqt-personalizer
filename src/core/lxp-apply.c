@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "lxp-apply.h"
 
+#include "lxp-assets.h"
 #include "lxp-backend.h"
 #include "lxp-error.h"
 #include "lxp-snapshot.h"
@@ -57,7 +58,9 @@ char *lxp_apply_theme(const LxpTheme *theme, const char *const *only,
     g_autofree char *label = NULL;
     g_autofree char *id = NULL;
 
-    if (!(flags & LXP_APPLY_SKIP_CHECKS) && !lxp_check_theme(theme, only, error))
+    /* Generated themes must be installed before they can be checked. */
+    if (!lxp_assets_install(theme, error) ||
+        (!(flags & LXP_APPLY_SKIP_CHECKS) && !lxp_check_theme(theme, only, error)))
         return NULL;
 
     files = lxp_backends_managed_files(only);

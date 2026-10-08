@@ -45,6 +45,13 @@ void        lxp_theme_set_string_list(LxpTheme *theme, const char *group,
 void        lxp_theme_remove_group(LxpTheme *theme, const char *group);
 char       *lxp_theme_to_data(const LxpTheme *theme);
 
+/*
+ * Make the theme self-contained: copy an absolute [Wallpaper] file that
+ * lives outside <dir> into <dir> as "wallpaper.<ext>" and refer to it
+ * relatively.
+ */
+gboolean    lxp_theme_bundle_wallpaper(LxpTheme *theme, const char *dir, GError **error);
+
 /* "Nord Night!" -> "nord-night" */
 char       *lxp_theme_slugify(const char *name);
 

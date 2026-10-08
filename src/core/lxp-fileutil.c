@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <glib/gstdio.h>
+#include <sys/stat.h>
 
 static gboolean set_errno_error(GError **error, int err, const char *what,
                                 const char *path)
@@ -40,6 +41,33 @@ gboolean lxp_copy_atomic(const char *src, const char *dst, int mode,
     if (!g_file_get_contents(src, &data, &len, error))
         return FALSE;
     return lxp_write_atomic(dst, data, (gssize)len, mode, error);
+}
+
+gboolean lxp_copy_tree(const char *src, const char *dst, GError **error)
+{
+    g_autoptr(GDir) dir = NULL;
+    const char *name;
+    GStatBuf st;
+
+    if (g_lstat(src, &st) != 0)
+        return set_errno_error(error, errno, "read", src);
+    if (!S_ISDIR(st.st_mode))
+        return lxp_copy_atomic(src, dst, st.st_mode & 0777, error);
+
+    if (g_mkdir_with_parents(dst, 0755) != 0)
+        return set_errno_error(error, errno, "create directory", dst);
+    if (!(dir = g_dir_open(src, 0, error)))
+        return FALSE;
+    while ((name = g_dir_read_name(dir))) {
+        g_autofree char *s = g_build_filename(src, name, NULL);
+        g_autofree char *d = g_build_filename(dst, name, NULL);
+
+        if (g_file_test(s, G_FILE_TEST_IS_SYMLINK))
+            continue;  /* never follow links out of a theme */
+        if (!lxp_copy_tree(s, d, error))
+            return FALSE;
+    }
+    return TRUE;
 }
 
 gboolean lxp_remove_tree(const char *path, GError **error)

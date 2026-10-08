@@ -119,6 +119,12 @@ void lxp_theme_set_string(LxpTheme *theme, const char *group,
         g_key_file_set_string(theme->kf, group, key, value);
     else
         g_key_file_remove_key(theme->kf, group, key, NULL);
+
+    /* keep lxp_theme_get_name() in sync with the manifest */
+    if (value && *value && g_str_equal(group, LXP_THEME_GROUP) && g_str_equal(key, "Name")) {
+        g_free(theme->name);
+        theme->name = g_strdup(value);
+    }
 }
 
 char **lxp_theme_get_string_list(const LxpTheme *theme, const char *group,
@@ -142,6 +148,35 @@ void lxp_theme_remove_group(LxpTheme *theme, const char *group)
 char *lxp_theme_to_data(const LxpTheme *theme)
 {
     return g_key_file_to_data(theme->kf, NULL, NULL);
+}
+
+gboolean lxp_theme_bundle_wallpaper(LxpTheme *theme, const char *dir, GError **error)
+{
+    g_autofree char *file = lxp_theme_get_string(theme, "Wallpaper", "file");
+    g_autofree char *canonical_dir = NULL;
+    g_autofree char *base = NULL;
+    g_autofree char *name = NULL;
+    g_autofree char *dest = NULL;
+    const char *dot;
+
+    if (!file || !g_path_is_absolute(file))
+        return TRUE;
+    canonical_dir = g_canonicalize_filename(dir, NULL);
+    if (g_str_has_prefix(file, canonical_dir) &&
+        file[strlen(canonical_dir)] == G_DIR_SEPARATOR) {
+        /* already bundled: store it relative again */
+        lxp_theme_set_string(theme, "Wallpaper", "file", file + strlen(canonical_dir) + 1);
+        return TRUE;
+    }
+
+    base = g_path_get_basename(file);
+    dot = strrchr(base, '.');
+    name = g_strconcat("wallpaper", dot ? dot : "", NULL);
+    dest = g_build_filename(dir, name, NULL);
+    if (!lxp_copy_atomic(file, dest, 0644, error))
+        return FALSE;
+    lxp_theme_set_string(theme, "Wallpaper", "file", name);
+    return TRUE;
 }
 
 char *lxp_theme_slugify(const char *name)

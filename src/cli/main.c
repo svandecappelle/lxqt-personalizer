@@ -2,12 +2,15 @@
 #include "config.h"
 #include "lxp-apply.h"
 #include "lxp-backend.h"
+#include "lxp-fileutil.h"
 #include "lxp-paths.h"
 #include "lxp-preview-render.h"
+#include "lxp-scheme.h"
 #include "lxp-snapshot.h"
 #include "lxp-theme.h"
 
 #include <glib-unix.h>
+#include <string.h>
 #include <locale.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -143,6 +146,143 @@ static int cmd_capture(int argc, char **argv)
     if (!lxp_theme_save(theme, dir, &error))
         return fail(error);
     g_print("Saved theme “%s” to %s\n", argv[1], dir);
+    return 0;
+}
+
+/* Theme directory for <name>: <output> or the user themes directory. */
+static char *theme_dir_for(const char *name, const char *output)
+{
+    g_autofree char *themes = NULL;
+    g_autofree char *slug = NULL;
+
+    if (output)
+        return g_strdup(output);
+    themes = lxp_paths_themes_dir();
+    slug = lxp_theme_slugify(name);
+    return g_build_filename(themes, slug, NULL);
+}
+
+static gboolean parse_color_option(const char *name, const char *value, LxpColor *color,
+                                   gboolean *set)
+{
+    if (!value)
+        return TRUE;
+    if (!lxp_color_parse(value, color)) {
+        g_printerr("lxp: invalid color for --%s: “%s”\n", name, value);
+        return FALSE;
+    }
+    if (set)
+        *set = TRUE;
+    return TRUE;
+}
+
+static int cmd_new(int argc, char **argv)
+{
+    g_autofree char *bg = NULL, *surface = NULL, *fg = NULL, *accent = NULL;
+    g_autofree char *accent_text = NULL, *title = NULL, *panel = NULL;
+    g_autofree char *font = NULL, *icons = NULL, *wallpaper = NULL, *mode = NULL;
+    g_autofree char *output = NULL;
+    gboolean from_current = FALSE, force = FALSE;
+    const GOptionEntry entries[] = {
+        { "from-current", 'c', 0, G_OPTION_ARG_NONE, &from_current,
+          "Start from the current desktop (colors default to its palette)", NULL },
+        { "background", 0, 0, G_OPTION_ARG_STRING, &bg, "Window background", "COLOR" },
+        { "surface", 0, 0, G_OPTION_ARG_STRING, &surface, "Views and entries", "COLOR" },
+        { "foreground", 0, 0, G_OPTION_ARG_STRING, &fg, "Text", "COLOR" },
+        { "accent", 0, 0, G_OPTION_ARG_STRING, &accent, "Selection and highlights", "COLOR" },
+        { "accent-text", 0, 0, G_OPTION_ARG_STRING, &accent_text, "Text on accent", "COLOR" },
+        { "title", 0, 0, G_OPTION_ARG_STRING, &title, "Active title bar", "COLOR" },
+        { "panel", 0, 0, G_OPTION_ARG_STRING, &panel, "Panel background", "COLOR" },
+        { "font", 0, 0, G_OPTION_ARG_STRING, &font, "Font, e.g. “Noto Sans 10”", "FONT" },
+        { "icons", 0, 0, G_OPTION_ARG_STRING, &icons, "Icon theme", "NAME" },
+        { "wallpaper", 0, 0, G_OPTION_ARG_FILENAME, &wallpaper,
+          "Wallpaper (copied into the theme)", "FILE" },
+        { "wallpaper-mode", 0, 0, G_OPTION_ARG_STRING, &mode,
+          "zoom, fit, stretch, center, tile or color", "MODE" },
+        { "output", 'o', 0, G_OPTION_ARG_FILENAME, &output,
+          "Write the theme to DIR instead of the themes directory", "DIR" },
+        { "force", 'f', 0, G_OPTION_ARG_NONE, &force, "Overwrite an existing theme", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
+    g_autoptr(LxpTheme) theme = NULL;
+    g_autofree char *dir = NULL;
+    g_autofree char *manifest = NULL;
+    LxpScheme scheme = { 0 };
+    gboolean seeded;
+    GError *error = NULL;
+    int ret = 1;
+
+    if (!parse_options("new", "NAME", entries, &argc, &argv))
+        return 2;
+    if (argc != 2) {
+        g_printerr("Usage: lxp new [OPTION…] NAME\n");
+        return 2;
+    }
+
+    dir = theme_dir_for(argv[1], output);
+    manifest = g_build_filename(dir, LXP_THEME_MANIFEST, NULL);
+    if (!force && g_file_test(manifest, G_FILE_TEST_EXISTS)) {
+        g_printerr("lxp: %s already exists (use --force to overwrite)\n", dir);
+        return 1;
+    }
+
+    theme = from_current ? lxp_capture_current(argv[1], NULL, NULL) : lxp_theme_new(argv[1]);
+    seeded = from_current && lxp_scheme_from_palette(theme, &scheme);
+    if (!seeded && (!bg || !surface || !fg || !accent)) {
+        g_printerr("lxp: --background, --surface, --foreground and --accent are required%s\n",
+                   from_current ? " (the current desktop has no custom palette)" : "");
+        return 2;
+    }
+    if (!parse_color_option("background", bg, &scheme.background, NULL) ||
+        !parse_color_option("surface", surface, &scheme.surface, NULL) ||
+        !parse_color_option("foreground", fg, &scheme.foreground, NULL) ||
+        !parse_color_option("accent", accent, &scheme.accent, NULL) ||
+        !parse_color_option("accent-text", accent_text, &scheme.accent_text,
+                            &scheme.has_accent_text) ||
+        !parse_color_option("title", title, &scheme.title, &scheme.has_title) ||
+        !parse_color_option("panel", panel, &scheme.panel, &scheme.has_panel))
+        return 2;
+    scheme.font = g_strdup(font);
+    lxp_scheme_save(&scheme, theme);
+
+    if (icons) {
+        lxp_theme_set_string(theme, "LXQt", "icon_theme", icons);
+        lxp_theme_set_string(theme, "GTK", "icon_theme", icons);
+    }
+    if (wallpaper) {
+        g_autofree char *absolute = g_canonicalize_filename(wallpaper, NULL);
+        lxp_theme_set_string(theme, "Wallpaper", "file", absolute);
+        lxp_theme_set_string(theme, "Wallpaper", "mode", mode ? mode : "zoom");
+    }
+
+    if (!lxp_theme_bundle_wallpaper(theme, dir, &error) ||
+        !lxp_scheme_generate(theme, dir, &error) || !lxp_theme_save(theme, dir, &error))
+        goto out;
+    g_print("Created theme “%s” in %s\n", argv[1], dir);
+    ret = 0;
+out:
+    lxp_scheme_clear(&scheme);
+    return error ? fail(error) : ret;
+}
+
+static int cmd_generate(int argc, char **argv)
+{
+    g_autofree char *dir = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    GError *error = NULL;
+
+    if (!parse_options("generate", "NAME|DIR", NULL, &argc, &argv))
+        return 2;
+    if (argc != 2) {
+        g_printerr("Usage: lxp generate NAME|DIR\n");
+        return 2;
+    }
+    if (!(dir = lxp_theme_resolve(argv[1], &error)) ||
+        !(theme = lxp_theme_load(dir, &error)) ||
+        !lxp_scheme_generate(theme, dir, &error) ||
+        !lxp_theme_save(theme, dir, &error))
+        return fail(error);
+    g_print("Regenerated “%s” from its color scheme\n", lxp_theme_get_name(theme));
     return 0;
 }
 
@@ -472,6 +612,8 @@ static int cmd_apply(int argc, char **argv)
 static const Command commands[] = {
     { "backends",  "",          "List supported desktop components",          cmd_backends },
     { "capture",   "NAME",      "Save the current desktop look as a theme",   cmd_capture },
+    { "new",       "NAME",      "Create a theme from a few colors",           cmd_new },
+    { "generate",  "NAME|DIR",  "Regenerate a theme from its [Scheme]",       cmd_generate },
     { "list",      "",          "List installed themes",                      cmd_list },
     { "show",      "NAME|DIR",  "Print a theme manifest",                     cmd_show },
     { "preview",   "NAME|DIR",  "Render a desktop mockup of a theme to PNG",  cmd_preview },

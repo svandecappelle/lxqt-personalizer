@@ -11,3 +11,6 @@
  * Results are cached; main thread only.
  */
 const char *lxp_icon_lookup(const char *theme, const char *const *names, int size);
+
+/* Names of installed icon themes (not cursor-only ones), sorted. */
+GPtrArray  *lxp_icon_themes_list(void);

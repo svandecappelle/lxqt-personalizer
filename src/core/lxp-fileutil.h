@@ -17,5 +17,8 @@ gboolean lxp_write_atomic(const char *path, const char *data, gssize len,
 gboolean lxp_copy_atomic(const char *src, const char *dst, int mode,
                          GError **error);
 
+/* Recursively copy directory <src> to <dst> (which must not exist). */
+gboolean lxp_copy_tree(const char *src, const char *dst, GError **error);
+
 /* Recursively delete <path>. Missing paths are not an error. */
 gboolean lxp_remove_tree(const char *path, GError **error);

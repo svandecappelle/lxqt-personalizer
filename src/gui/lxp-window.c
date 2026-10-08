@@ -2,6 +2,7 @@
 #include "lxp-window.h"
 
 #include "lxp-apply.h"
+#include "lxp-editor.h"
 #include "lxp-fileutil.h"
 #include "lxp-paths.h"
 #include "lxp-preview-area.h"
@@ -29,6 +30,7 @@ struct _LxpWindow {
     GtkWidget *apply_button;
     GtkWidget *try_button;
     GtkWidget *delete_button;
+    GtkWidget *edit_button;
     GtkWidget *save_button;
     GtkWidget *spinner;
     GtkWidget *banner;
@@ -202,6 +204,7 @@ static void update_details(LxpWindow *win)
     gtk_widget_set_visible(win->apply_button, e->dir != NULL);
     gtk_widget_set_visible(win->try_button, e->dir != NULL);
     gtk_widget_set_visible(win->delete_button, e->dir != NULL);
+    gtk_widget_set_visible(win->edit_button, e->dir != NULL);
     gtk_widget_set_visible(win->save_button, e->dir == NULL);
     gtk_widget_set_sensitive(win->apply_button, idle);
     gtk_widget_set_sensitive(win->try_button, idle);
@@ -565,6 +568,29 @@ static void save_current_activated(GtkWidget *widget, const char *action, GVaria
     gtk_widget_grab_focus(entry);
 }
 
+/* --- editor ------------------------------------------------------------- */
+
+static void on_editor_saved(const char *dir, gpointer user)
+{
+    LxpWindow *win = user;
+
+    reload_gallery(win, dir);
+    show_banner(win, "Theme saved. Use Try or Apply to see it on your desktop.", FALSE);
+}
+
+static void new_theme_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    lxp_editor_open(GTK_WINDOW(widget), NULL, on_editor_saved, widget);
+}
+
+static void on_edit(GtkButton *button, gpointer user)
+{
+    LxpWindow *win = user;
+
+    if (win->selected && win->selected->dir)
+        lxp_editor_open(GTK_WINDOW(win), win->selected->dir, on_editor_saved, win);
+}
+
 /* --- delete ------------------------------------------------------------- */
 
 static void delete_response(GObject *source, GAsyncResult *res, gpointer user)
@@ -607,11 +633,14 @@ static void on_delete(GtkButton *button, gpointer user)
 static GtkWidget *build_header(LxpWindow *win)
 {
     GtkWidget *header = gtk_header_bar_new();
+    GtkWidget *create = gtk_button_new_from_icon_name("list-add-symbolic");
     GtkWidget *save = gtk_button_new_from_icon_name("document-save-as-symbolic");
     GtkWidget *undo = gtk_button_new_from_icon_name("edit-undo-symbolic");
     GtkWidget *menu_button = gtk_menu_button_new();
     g_autoptr(GMenu) menu = g_menu_new();
 
+    gtk_widget_set_tooltip_text(create, "Create a theme from a few colors");
+    gtk_actionable_set_action_name(GTK_ACTIONABLE(create), "win.new-theme");
     gtk_widget_set_tooltip_text(save, "Save the current desktop as a theme");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(save), "win.save-current");
     gtk_widget_set_tooltip_text(undo, "Undo the last change to the desktop");
@@ -626,6 +655,7 @@ static GtkWidget *build_header(LxpWindow *win)
     win->spinner = gtk_spinner_new();
     gtk_widget_set_visible(win->spinner, FALSE);
 
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), create);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), save);
     gtk_header_bar_pack_start(GTK_HEADER_BAR(header), undo);
     gtk_header_bar_pack_end(GTK_HEADER_BAR(header), menu_button);
@@ -684,6 +714,8 @@ static GtkWidget *build_details(LxpWindow *win)
     win->delete_button = gtk_button_new_with_mnemonic("_Delete");
     gtk_widget_add_css_class(win->delete_button, "destructive-action");
     g_signal_connect(win->delete_button, "clicked", G_CALLBACK(on_delete), win);
+    win->edit_button = gtk_button_new_with_mnemonic("_Edit Colors…");
+    g_signal_connect(win->edit_button, "clicked", G_CALLBACK(on_edit), win);
     win->save_button = gtk_button_new_with_mnemonic("_Save as Theme…");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(win->save_button), "win.save-current");
     win->try_button = gtk_button_new_with_mnemonic("_Try");
@@ -697,6 +729,7 @@ static GtkWidget *build_details(LxpWindow *win)
     gtk_widget_set_hexpand(spacer, TRUE);
     gtk_box_append(GTK_BOX(actions), win->delete_button);
     gtk_box_append(GTK_BOX(actions), spacer);
+    gtk_box_append(GTK_BOX(actions), win->edit_button);
     gtk_box_append(GTK_BOX(actions), win->save_button);
     gtk_box_append(GTK_BOX(actions), win->try_button);
     gtk_box_append(GTK_BOX(actions), win->apply_button);
@@ -752,11 +785,14 @@ static void lxp_window_class_init(LxpWindowClass *klass)
 
     gtk_widget_class_install_action(widget_class, "win.save-current", NULL,
                                     save_current_activated);
+    gtk_widget_class_install_action(widget_class, "win.new-theme", NULL, new_theme_activated);
     gtk_widget_class_install_action(widget_class, "win.undo", NULL, undo_activated);
     gtk_widget_class_install_action(widget_class, "win.reload-desktop", NULL,
                                     reload_desktop_activated);
     gtk_widget_class_install_action(widget_class, "win.refresh", NULL, refresh_activated);
     gtk_widget_class_add_binding_action(widget_class, GDK_KEY_F5, 0, "win.refresh", NULL);
+    gtk_widget_class_add_binding_action(widget_class, GDK_KEY_n, GDK_CONTROL_MASK,
+                                        "win.new-theme", NULL);
     gtk_widget_class_add_binding_action(widget_class, GDK_KEY_z, GDK_CONTROL_MASK,
                                         "win.undo", NULL);
 }

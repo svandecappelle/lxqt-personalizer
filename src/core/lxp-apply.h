@@ -5,7 +5,8 @@
 
 /*
  * Applying a theme:
- *   1. check()   every selected backend; nothing is written on failure
+ *   0. install   assets bundled in the theme's data/ (lxp-assets.h)
+ *   1. check()   every selected backend; no config is written on failure
  *   2. snapshot  the files the selected backends manage
  *   3. apply()   each backend; on failure the snapshot is restored
  * Reloading running programs is a separate step (lxp_reload), so callers

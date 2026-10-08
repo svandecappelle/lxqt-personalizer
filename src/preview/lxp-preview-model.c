@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "lxp-preview-model.h"
 
+#include "lxp-assets.h"
+#include "lxp-scheme.h"
 #include "lxp-themerc.h"
 
 #include <stdlib.h>
@@ -140,8 +142,18 @@ static void load_openbox(LxpPreviewModel *m, const LxpTheme *theme)
     g_autofree char *name = lxp_theme_get_string(theme, "Openbox", "theme");
     g_autofree char *layout = lxp_theme_get_string(theme, "Openbox", "title_layout");
     g_auto(GStrv) font = lxp_theme_get_string_list(theme, "Openbox", "font_ActiveWindow");
-    g_autoptr(LxpThemerc) rc = name ? lxp_themerc_load_theme(name, NULL) : NULL;
+    g_autofree char *bundled = name ? lxp_assets_find(theme, "themes", name,
+                                                      "openbox-3/themerc") : NULL;
+    g_autoptr(LxpThemerc) rc = NULL;
     const char *justify;
+
+    /* A theme's own generated Openbox theme wins over an installed one. */
+    if (bundled) {
+        g_autofree char *path = g_build_filename(bundled, "openbox-3", "themerc", NULL);
+        rc = lxp_themerc_load(path, NULL);
+    } else if (name) {
+        rc = lxp_themerc_load_theme(name, NULL);
+    }
 
     m->has_openbox = rc != NULL;
     load_decoration(&m->active, rc, "active", m, TRUE);
@@ -193,16 +205,23 @@ static void load_panel(LxpPreviewModel *m, const LxpTheme *theme)
     g_autofree char *position = lxp_theme_get_string(theme, "Panel", "position");
     g_autofree char *bg = lxp_theme_get_string(theme, "Panel", "background-color");
     g_autofree char *fg = lxp_theme_get_string(theme, "Panel", "font-color");
+    LxpScheme scheme;
+    LxpSchemeColors colors;
+    gboolean has_scheme = lxp_scheme_load(theme, &scheme, NULL);
 
     m->panel_position = g_strdup(position ? position : "Bottom");
     m->panel_size = CLAMP(theme_int(theme, "Panel", "panelSize", 32), 16, 128);
     m->panel_icon_size = CLAMP(theme_int(theme, "Panel", "iconSize", 22), 8, 96);
     m->panel_opacity = CLAMP(theme_int(theme, "Panel", "opacity", 100), 0, 100) / 100.0;
 
+    /* Without a panel color, the LXQt theme decides: ours if generated. */
+    if (has_scheme)
+        lxp_scheme_derive(&scheme, &colors);
     if (!lxp_qt_color_parse(bg, &m->panel_bg))
-        m->panel_bg = m->window;
+        m->panel_bg = has_scheme ? colors.panel : m->window;
     if (!lxp_qt_color_parse(fg, &m->panel_text))
-        m->panel_text = m->window_text;
+        m->panel_text = has_scheme ? colors.panel_fg : m->window_text;
+    lxp_scheme_clear(&scheme);
 }
 
 static void load_wallpaper(LxpPreviewModel *m, const LxpTheme *theme)

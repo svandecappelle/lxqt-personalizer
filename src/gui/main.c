@@ -54,16 +54,32 @@ static void startup(GApplication *app, gpointer user)
 
 /*
  * Developer hook: LXP_SCREENSHOT=out.png renders the window to a PNG once
- * it is shown, then quits (for docs and visual checks).
+ * it is shown, then quits (for docs and visual checks). Setting
+ * LXP_SCREENSHOT_ACTION=win.new-theme first opens the editor and
+ * captures it instead.
  */
 static gboolean screenshot_cb(gpointer data)
 {
     GtkWidget *win = data;
+    GtkApplication *app = gtk_window_get_application(GTK_WINDOW(win));
     const char *path = g_getenv("LXP_SCREENSHOT");
-    int w = gtk_widget_get_width(win), h = gtk_widget_get_height(win);
-    g_autoptr(GdkPaintable) paintable = gtk_widget_paintable_new(win);
+    g_autoptr(GdkPaintable) paintable = NULL;
     GtkSnapshot *snapshot = gtk_snapshot_new();
     GskRenderNode *node;
+    int w, h;
+
+    /* With LXP_SCREENSHOT_ACTION, capture the window the action opened. */
+    if (g_getenv("LXP_SCREENSHOT_ACTION")) {
+        for (GList *l = gtk_application_get_windows(app); l; l = l->next) {
+            if (l->data != data) {
+                win = l->data;
+                break;
+            }
+        }
+    }
+    w = gtk_widget_get_width(win);
+    h = gtk_widget_get_height(win);
+    paintable = gtk_widget_paintable_new(win);
 
     gdk_paintable_snapshot(paintable, snapshot, w, h);
     node = gtk_snapshot_free_to_node(snapshot);
@@ -76,7 +92,7 @@ static gboolean screenshot_cb(gpointer data)
             g_printerr("Failed to save %s\n", path);
         gsk_render_node_unref(node);
     }
-    g_application_quit(G_APPLICATION(gtk_window_get_application(GTK_WINDOW(win))));
+    g_application_quit(G_APPLICATION(app));
     return G_SOURCE_REMOVE;
 }
 
@@ -88,8 +104,12 @@ static void activate(GApplication *app, gpointer user)
         win = GTK_WINDOW(lxp_window_new(GTK_APPLICATION(app)));
     gtk_window_present(win);
 
-    if (g_getenv("LXP_SCREENSHOT"))
-        g_timeout_add(2000, screenshot_cb, win);
+    if (g_getenv("LXP_SCREENSHOT")) {
+        const char *action = g_getenv("LXP_SCREENSHOT_ACTION");
+        if (action)
+            gtk_widget_activate_action(GTK_WIDGET(win), action, NULL);
+        g_timeout_add(2500, screenshot_cb, win);
+    }
 }
 
 int main(int argc, char **argv)

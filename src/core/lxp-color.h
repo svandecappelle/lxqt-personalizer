@@ -27,3 +27,13 @@ char    *lxp_color_to_hex(const LxpColor *color);
 LxpColor lxp_color_mix(const LxpColor *a, const LxpColor *b, double t);
 /* Relative luminance (WCAG), 0 = black, 1 = white. */
 double   lxp_color_luminance(const LxpColor *color);
+
+/* WCAG contrast ratio, 1 (none) to 21 (black on white). */
+double   lxp_color_contrast(const LxpColor *a, const LxpColor *b);
+
+/* Hue in degrees [0, 360), saturation and lightness in [0, 1]. */
+void     lxp_color_to_hsl(const LxpColor *color, double *h, double *s, double *l);
+LxpColor lxp_color_from_hsl(double h, double s, double l, double alpha);
+
+/* "r, g, b" with 0-255 components, for rgba() in CSS and QSS. */
+char    *lxp_color_to_rgb_triplet(const LxpColor *color);

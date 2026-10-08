@@ -246,3 +246,35 @@ const char *lxp_icon_lookup(const char *theme, const char *const *names, int siz
     g_hash_table_insert(results, g_steal_pointer(&key), path ? path : g_strdup(""));
     return path;
 }
+
+GPtrArray *lxp_icon_themes_list(void)
+{
+    g_autoptr(GPtrArray) bases = g_ptr_array_new_with_free_func(g_free);
+    g_autoptr(GHashTable) seen = g_hash_table_new(g_str_hash, g_str_equal);
+    GPtrArray *names = g_ptr_array_new_with_free_func(g_free);
+
+    g_ptr_array_add(bases, g_build_filename(g_get_home_dir(), ".icons", NULL));
+    g_ptr_array_add(bases, g_build_filename(g_get_user_data_dir(), "icons", NULL));
+    for (const char *const *d = g_get_system_data_dirs(); *d; d++)
+        g_ptr_array_add(bases, g_build_filename(*d, "icons", NULL));
+
+    for (guint i = 0; i < bases->len; i++) {
+        g_autoptr(GDir) dir = g_dir_open(g_ptr_array_index(bases, i), 0, NULL);
+        const char *name;
+
+        while (dir && (name = g_dir_read_name(dir))) {
+            g_autofree char *index = g_build_filename(g_ptr_array_index(bases, i), name,
+                                                      "index.theme", NULL);
+            g_autoptr(GKeyFile) kf = g_key_file_new();
+
+            if (g_hash_table_contains(seen, name) || g_str_equal(name, "default") ||
+                !g_key_file_load_from_file(kf, index, G_KEY_FILE_NONE, NULL) ||
+                !g_key_file_has_key(kf, "Icon Theme", "Directories", NULL))
+                continue;
+            g_ptr_array_add(names, g_strdup(name));
+            g_hash_table_add(seen, g_ptr_array_index(names, names->len - 1));
+        }
+    }
+    g_ptr_array_sort_values(names, (GCompareFunc)g_ascii_strcasecmp);
+    return names;
+}

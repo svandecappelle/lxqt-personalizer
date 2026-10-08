@@ -2,6 +2,7 @@ pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4>=4.12)
 
 add_executable(lxqt-personalizer
     main.c
+    lxp-editor.c
     lxp-preview-area.c
     lxp-runner.c
     lxp-window.c)

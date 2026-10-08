@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/lxp/templates">
+    <file>themerc</file>
+    <file>lxqt-panel.qss</file>
+    <file>lxqt-runner.qss</file>
+    <file>lxqt-notificationd.qss</file>
+    <file>gtk-fallback.css</file>
+    <file>index.theme</file>
+  </gresource>
+</gresources>

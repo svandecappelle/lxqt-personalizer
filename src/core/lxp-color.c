@@ -88,12 +88,14 @@ static gboolean parse_x11_rgb(const char *s, LxpColor *c)
 
 gboolean lxp_color_parse(const char *text, LxpColor *color)
 {
+    g_autofree char *copy = NULL;
     g_autofree char *s = NULL;
     guint64 level;
 
     if (!text)
         return FALSE;
-    s = g_ascii_strdown(g_strstrip(g_strdup(text)), -1);
+    copy = g_strdup(text);
+    s = g_ascii_strdown(g_strstrip(copy), -1);
 
     if (s[0] == '#')
         return parse_hash(s + 1, color);
@@ -213,4 +215,77 @@ static double linear(double v)
 double lxp_color_luminance(const LxpColor *c)
 {
     return 0.2126 * linear(c->r) + 0.7152 * linear(c->g) + 0.0722 * linear(c->b);
+}
+
+double lxp_color_contrast(const LxpColor *a, const LxpColor *b)
+{
+    double la = lxp_color_luminance(a) + 0.05;
+    double lb = lxp_color_luminance(b) + 0.05;
+
+    return la > lb ? la / lb : lb / la;
+}
+
+void lxp_color_to_hsl(const LxpColor *c, double *h, double *s, double *l)
+{
+    double max = MAX(c->r, MAX(c->g, c->b));
+    double min = MIN(c->r, MIN(c->g, c->b));
+    double d = max - min;
+
+    *l = (max + min) / 2;
+    if (d < 1e-9) {
+        *h = 0;
+        *s = 0;
+        return;
+    }
+    *s = *l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max == c->r)
+        *h = fmod((c->g - c->b) / d + 6, 6);
+    else if (max == c->g)
+        *h = (c->b - c->r) / d + 2;
+    else
+        *h = (c->r - c->g) / d + 4;
+    *h *= 60;
+}
+
+static double hue_channel(double p, double q, double t)
+{
+    if (t < 0)
+        t += 1;
+    if (t > 1)
+        t -= 1;
+    if (t < 1.0 / 6)
+        return p + (q - p) * 6 * t;
+    if (t < 0.5)
+        return q;
+    if (t < 2.0 / 3)
+        return p + (q - p) * (2.0 / 3 - t) * 6;
+    return p;
+}
+
+LxpColor lxp_color_from_hsl(double h, double s, double l, double alpha)
+{
+    LxpColor c = { l, l, l, alpha };
+    double q, p, hk;
+
+    s = CLAMP(s, 0, 1);
+    l = CLAMP(l, 0, 1);
+    if (s < 1e-9) {
+        c.r = c.g = c.b = l;
+        return c;
+    }
+    q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    p = 2 * l - q;
+    hk = fmod(fmod(h, 360) + 360, 360) / 360;
+    c.r = hue_channel(p, q, hk + 1.0 / 3);
+    c.g = hue_channel(p, q, hk);
+    c.b = hue_channel(p, q, hk - 1.0 / 3);
+    return c;
+}
+
+char *lxp_color_to_rgb_triplet(const LxpColor *c)
+{
+    return g_strdup_printf("%d, %d, %d",
+                           (int)round(CLAMP(c->r, 0, 1) * 255),
+                           (int)round(CLAMP(c->g, 0, 1) * 255),
+                           (int)round(CLAMP(c->b, 0, 1) * 255));
 }
