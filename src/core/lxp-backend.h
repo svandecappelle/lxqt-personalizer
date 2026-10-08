@@ -45,6 +45,14 @@ const LxpBackend *const *lxp_backends_get_all(void);
 const LxpBackend        *lxp_backend_find(const char *id);
 gboolean                 lxp_backend_is_available(const LxpBackend *backend);
 
+/*
+ * Directory of asset <name> of <kind> ("themes", "icons", "lxqt/themes")
+ * containing <probe>: installed (lxp_find_installed) or bundled in the
+ * theme (lxp_assets_find). NULL if neither.
+ */
+char                    *lxp_backend_locate(const LxpTheme *theme, const char *kind,
+                                            const char *name, const char *probe);
+
 /* Fail with a "not installed" error when <path> is NULL; frees <path>. */
 gboolean                 lxp_backend_require(char *path, const char *what,
                                              const char *name, GError **error);

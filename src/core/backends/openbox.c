@@ -203,7 +203,7 @@ static gboolean openbox_check(const LxpTheme *theme, GError **error)
 
     if (!name)
         return TRUE;
-    return lxp_backend_require(lxp_find_installed("themes", name, "openbox-3/themerc"),
+    return lxp_backend_require(lxp_backend_locate(theme, "themes", name, "openbox-3/themerc"),
                                "Openbox theme", name, error);
 }
 

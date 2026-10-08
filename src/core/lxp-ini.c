@@ -210,20 +210,44 @@ static gboolean is_blank(const Line *line)
     return TRUE;
 }
 
+/* Values never span lines: a newline would inject keys or groups. */
+static char *single_line(const char *value)
+{
+    char *copy = g_strdup(value);
+
+    for (char *p = copy; *p; p++)
+        if (*p == '\n' || *p == '\r')
+            *p = ' ';
+    return copy;
+}
+
+/* A key that would read back as a comment, group or another key. */
+static gboolean valid_key(const char *key)
+{
+    return key && *key && !strpbrk(key, "=\n\r") &&
+           key[0] != '[' && key[0] != '#' && key[0] != ';' &&
+           !g_ascii_isspace(key[0]);
+}
+
 static void set_line_value(Line *line, const char *value)
 {
     g_free(line->value);
     g_free(line->text);
-    line->value = g_strdup(value);
-    line->text = g_strconcat(line->key, line->sep, value, NULL);
+    line->value = single_line(value);
+    line->text = g_strconcat(line->key, line->sep, line->value, NULL);
 }
 
 void lxp_ini_set(LxpIni *ini, const char *group, const char *key,
                  const char *value)
 {
-    Line *line = find_key(ini, group, key, NULL);
+    Line *line;
     gint insert_at = -1;
 
+    if (!valid_key(key) || (group && strpbrk(group, "[]\n\r"))) {
+        g_warning("Refusing to write invalid INI key “%s”", key ? key : "(null)");
+        return;
+    }
+    line = find_key(ini, group, key, NULL);
     if (line) {
         if (g_strcmp0(line->value, value) != 0)
             set_line_value(line, value);

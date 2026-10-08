@@ -3,6 +3,7 @@
 #include "lxp-apply.h"
 #include "lxp-backend.h"
 #include "lxp-fileutil.h"
+#include "lxp-pack.h"
 #include "lxp-paths.h"
 #include "lxp-preview-render.h"
 #include "lxp-scheme.h"
@@ -372,6 +373,126 @@ static int cmd_preview(int argc, char **argv)
     return 0;
 }
 
+/* Print what <theme> needs that is neither installed nor bundled. */
+static int report_missing(const LxpTheme *theme)
+{
+    g_autoptr(GPtrArray) problems = lxp_check_theme_all(theme, NULL);
+
+    for (guint i = 0; i < problems->len; i++)
+        g_print("  missing: %s\n", ((GError *)problems->pdata[i])->message);
+    return (int)problems->len;
+}
+
+static int cmd_check(int argc, char **argv)
+{
+    g_autofree char *dir = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    GError *error = NULL;
+
+    if (!parse_options("check", "NAME|DIR", NULL, &argc, &argv))
+        return 2;
+    if (argc != 2) {
+        g_printerr("Usage: lxp check NAME|DIR\n");
+        return 2;
+    }
+    if (!(dir = lxp_theme_resolve(argv[1], &error)) || !(theme = lxp_theme_load(dir, &error)))
+        return fail(error);
+    if (report_missing(theme) > 0)
+        return 1;
+    g_print("“%s” can be applied: everything it uses is available.\n",
+            lxp_theme_get_name(theme));
+    return 0;
+}
+
+static int cmd_export(int argc, char **argv)
+{
+    g_autofree char *output = NULL;
+    gboolean no_bundle = FALSE, no_preview = FALSE;
+    const GOptionEntry entries[] = {
+        { "output", 'o', 0, G_OPTION_ARG_FILENAME, &output,
+          "Archive to write (default: NAME.tar.gz)", "FILE" },
+        { "no-bundle", 0, 0, G_OPTION_ARG_NONE, &no_bundle,
+          "Do not include the Openbox/GTK/LXQt themes it uses", NULL },
+        { "no-preview", 0, 0, G_OPTION_ARG_NONE, &no_preview,
+          "Do not render preview.png", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
+    g_autofree char *dir = NULL;
+    g_autofree char *tmp = NULL;
+    g_autofree char *preview = NULL;
+    g_autofree char *archive = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    g_autoptr(GPtrArray) notes = g_ptr_array_new_with_free_func(g_free);
+    GError *error = NULL;
+    gboolean ok;
+
+    if (!parse_options("export", "NAME|DIR", entries, &argc, &argv))
+        return 2;
+    if (argc != 2) {
+        g_printerr("Usage: lxp export [OPTION…] NAME|DIR\n");
+        return 2;
+    }
+    if (!(dir = lxp_theme_resolve(argv[1], &error)) || !(theme = lxp_theme_load(dir, &error)))
+        return fail(error);
+
+    if (output) {
+        archive = g_steal_pointer(&output);
+    } else {
+        g_autofree char *slug = lxp_theme_slugify(lxp_theme_get_name(theme));
+        archive = g_strconcat(slug, ".tar.gz", NULL);
+    }
+
+    if (!no_preview) {
+        g_autoptr(LxpPreviewModel) model = lxp_preview_model_new(theme);
+        if (!(tmp = g_dir_make_tmp("lxp-preview-XXXXXX", &error)))
+            return fail(error);
+        preview = g_build_filename(tmp, "preview.png", NULL);
+        if (!lxp_preview_render_png(model, 960, 600, preview, &error)) {
+            lxp_remove_tree(tmp, NULL);
+            return fail(error);
+        }
+    }
+
+    ok = lxp_pack_export(theme, archive, preview,
+                         no_bundle ? LXP_PACK_NO_BUNDLE : LXP_PACK_DEFAULT, notes, &error);
+    if (tmp)
+        lxp_remove_tree(tmp, NULL);
+    if (!ok)
+        return fail(error);
+    for (guint i = 0; i < notes->len; i++)
+        g_print("  %s\n", (char *)notes->pdata[i]);
+    g_print("Exported “%s” to %s\n", lxp_theme_get_name(theme), archive);
+    return 0;
+}
+
+static int cmd_import(int argc, char **argv)
+{
+    gboolean force = FALSE;
+    const GOptionEntry entries[] = {
+        { "force", 'f', 0, G_OPTION_ARG_NONE, &force,
+          "Replace an installed theme with the same name", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
+    g_autofree char *dir = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    GError *error = NULL;
+
+    if (!parse_options("import", "FILE", entries, &argc, &argv))
+        return 2;
+    if (argc != 2) {
+        g_printerr("Usage: lxp import [OPTION…] FILE\n");
+        return 2;
+    }
+    if (!(dir = lxp_pack_import(argv[1], force ? LXP_PACK_FORCE : LXP_PACK_DEFAULT, &error)) ||
+        !(theme = lxp_theme_load(dir, &error)))
+        return fail(error);
+
+    g_print("Imported “%s” into %s\n", lxp_theme_get_name(theme), dir);
+    if (report_missing(theme) > 0)
+        g_print("Install the missing items before applying this theme.\n");
+    return 0;
+}
+
 static int cmd_snapshot(int argc, char **argv)
 {
     g_autofree char *id = NULL;
@@ -615,6 +736,9 @@ static const Command commands[] = {
     { "new",       "NAME",      "Create a theme from a few colors",           cmd_new },
     { "generate",  "NAME|DIR",  "Regenerate a theme from its [Scheme]",       cmd_generate },
     { "list",      "",          "List installed themes",                      cmd_list },
+    { "check",     "NAME|DIR",  "List what a theme needs that is missing",    cmd_check },
+    { "export",    "NAME|DIR",  "Save a theme as a shareable .tar.gz pack",   cmd_export },
+    { "import",    "FILE",      "Install a theme pack",                       cmd_import },
     { "show",      "NAME|DIR",  "Print a theme manifest",                     cmd_show },
     { "preview",   "NAME|DIR",  "Render a desktop mockup of a theme to PNG",  cmd_preview },
     { "apply",     "NAME|DIR",  "Apply a theme (--try N to confirm or revert)", cmd_apply },

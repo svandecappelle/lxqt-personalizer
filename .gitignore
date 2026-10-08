@@ -2,3 +2,7 @@
 /build-*/
 /compile_commands.json
 /.cache/
+/packaging/arch/src/
+/packaging/arch/pkg/
+/packaging/arch/lxqt-personalizer/
+/packaging/arch/*.pkg.tar.*

@@ -2,6 +2,8 @@
 #include "lxp-backend.h"
 
 #include "backends/backends.h"
+#include "lxp-assets.h"
+#include "lxp-system.h"
 #include "lxp-error.h"
 
 static const LxpBackend *const all_backends[] = {
@@ -30,6 +32,13 @@ const LxpBackend *lxp_backend_find(const char *id)
 gboolean lxp_backend_is_available(const LxpBackend *backend)
 {
     return !backend->available || backend->available();
+}
+
+char *lxp_backend_locate(const LxpTheme *theme, const char *kind, const char *name,
+                         const char *probe)
+{
+    char *path = lxp_find_installed(kind, name, probe);
+    return path ? path : lxp_assets_find(theme, kind, name, probe);
 }
 
 gboolean lxp_backend_require(char *path, const char *what, const char *name,

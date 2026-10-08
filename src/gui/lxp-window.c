@@ -4,6 +4,8 @@
 #include "lxp-apply.h"
 #include "lxp-editor.h"
 #include "lxp-fileutil.h"
+#include "lxp-pack.h"
+#include "lxp-preview-render.h"
 #include "lxp-paths.h"
 #include "lxp-preview-area.h"
 #include "lxp-runner.h"
@@ -31,6 +33,7 @@ struct _LxpWindow {
     GtkWidget *try_button;
     GtkWidget *delete_button;
     GtkWidget *edit_button;
+    GtkWidget *export_button;
     GtkWidget *save_button;
     GtkWidget *spinner;
     GtkWidget *banner;
@@ -205,6 +208,7 @@ static void update_details(LxpWindow *win)
     gtk_widget_set_visible(win->try_button, e->dir != NULL);
     gtk_widget_set_visible(win->delete_button, e->dir != NULL);
     gtk_widget_set_visible(win->edit_button, e->dir != NULL);
+    gtk_widget_set_visible(win->export_button, e->dir != NULL);
     gtk_widget_set_visible(win->save_button, e->dir == NULL);
     gtk_widget_set_sensitive(win->apply_button, idle);
     gtk_widget_set_sensitive(win->try_button, idle);
@@ -591,6 +595,116 @@ static void on_edit(GtkButton *button, gpointer user)
         lxp_editor_open(GTK_WINDOW(win), win->selected->dir, on_editor_saved, win);
 }
 
+/* --- import / export ---------------------------------------------------- */
+
+static GListModel *pack_filters(void)
+{
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    g_autoptr(GtkFileFilter) filter = gtk_file_filter_new();
+
+    gtk_file_filter_set_name(filter, "Theme packs");
+    gtk_file_filter_add_suffix(filter, "tar.gz");
+    gtk_file_filter_add_suffix(filter, "tgz");
+    gtk_file_filter_add_suffix(filter, "tar.xz");
+    gtk_file_filter_add_suffix(filter, "tar.zst");
+    g_list_store_append(filters, filter);
+    return G_LIST_MODEL(filters);
+}
+
+static void import_chosen(GObject *source, GAsyncResult *res, gpointer user)
+{
+    LxpWindow *win = user;
+    g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), res, NULL);
+    g_autofree char *path = file ? g_file_get_path(file) : NULL;
+    g_autofree char *dir = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    g_autoptr(GPtrArray) problems = NULL;
+    g_autoptr(GError) error = NULL;
+    GString *message;
+
+    if (!path)
+        return;
+    if (!(dir = lxp_pack_import(path, LXP_PACK_DEFAULT, &error)) ||
+        !(theme = lxp_theme_load(dir, &error))) {
+        show_banner(win, error->message, TRUE);
+        return;
+    }
+
+    reload_gallery(win, dir);
+    problems = lxp_check_theme_all(theme, NULL);
+    message = g_string_new(NULL);
+    g_string_printf(message, "Imported “%s”.", lxp_theme_get_name(theme));
+    if (problems->len > 0) {
+        g_string_append(message, " Install these before applying it:");
+        for (guint i = 0; i < problems->len; i++)
+            g_string_append_printf(message, "\n• %s", ((GError *)problems->pdata[i])->message);
+    }
+    show_banner(win, message->str, problems->len > 0);
+    g_string_free(message, TRUE);
+}
+
+static void import_activated(GtkWidget *widget, const char *action, GVariant *param)
+{
+    g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
+    g_autoptr(GListModel) filters = pack_filters();
+
+    gtk_file_dialog_set_title(dialog, "Import Theme");
+    gtk_file_dialog_set_filters(dialog, filters);
+    gtk_file_dialog_open(dialog, GTK_WINDOW(widget), NULL, import_chosen, widget);
+}
+
+static void export_chosen(GObject *source, GAsyncResult *res, gpointer user)
+{
+    LxpWindow *win = user;
+    g_autoptr(GFile) file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), res, NULL);
+    g_autofree char *path = file ? g_file_get_path(file) : NULL;
+    g_autofree char *tmp = NULL;
+    g_autofree char *preview = NULL;
+    g_autoptr(GPtrArray) notes = g_ptr_array_new_with_free_func(g_free);
+    g_autoptr(GError) error = NULL;
+    g_autoptr(LxpPreviewModel) model = NULL;
+    gboolean ok;
+
+    if (!path || !win->selected || !win->selected->dir)
+        return;
+
+    model = lxp_preview_model_new(win->selected->theme);
+    if ((tmp = g_dir_make_tmp("lxp-preview-XXXXXX", NULL))) {
+        preview = g_build_filename(tmp, "preview.png", NULL);
+        if (!lxp_preview_render_png(model, 960, 600, preview, NULL))
+            g_clear_pointer(&preview, g_free);
+    }
+    ok = lxp_pack_export(win->selected->theme, path, preview, LXP_PACK_DEFAULT, notes, &error);
+    if (tmp)
+        lxp_remove_tree(tmp, NULL);
+
+    if (!ok) {
+        show_banner(win, error->message, TRUE);
+    } else {
+        g_autofree char *base = g_path_get_basename(path);
+        g_autofree char *message = g_strdup_printf("Exported to %s.", base);
+        show_banner(win, message, FALSE);
+    }
+}
+
+static void on_export(GtkButton *button, gpointer user)
+{
+    LxpWindow *win = user;
+    g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
+    g_autoptr(GListModel) filters = pack_filters();
+    g_autofree char *slug = NULL;
+    g_autofree char *name = NULL;
+
+    if (!win->selected || !win->selected->dir)
+        return;
+    slug = lxp_theme_slugify(lxp_theme_get_name(win->selected->theme));
+    name = g_strconcat(slug, ".tar.gz", NULL);
+    gtk_file_dialog_set_title(dialog, "Export Theme");
+    gtk_file_dialog_set_filters(dialog, filters);
+    gtk_file_dialog_set_initial_name(dialog, name);
+    gtk_file_dialog_save(dialog, GTK_WINDOW(win), NULL, export_chosen, win);
+}
+
 /* --- delete ------------------------------------------------------------- */
 
 static void delete_response(GObject *source, GAsyncResult *res, gpointer user)
@@ -646,6 +760,7 @@ static GtkWidget *build_header(LxpWindow *win)
     gtk_widget_set_tooltip_text(undo, "Undo the last change to the desktop");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(undo), "win.undo");
 
+    g_menu_append(menu, "_Import Theme…", "win.import");
     g_menu_append(menu, "_Refresh Themes", "win.refresh");
     g_menu_append(menu, "Re_load Desktop", "win.reload-desktop");
     g_menu_append(menu, "_About", "app.about");
@@ -716,6 +831,9 @@ static GtkWidget *build_details(LxpWindow *win)
     g_signal_connect(win->delete_button, "clicked", G_CALLBACK(on_delete), win);
     win->edit_button = gtk_button_new_with_mnemonic("_Edit Colors…");
     g_signal_connect(win->edit_button, "clicked", G_CALLBACK(on_edit), win);
+    win->export_button = gtk_button_new_with_mnemonic("E_xport…");
+    gtk_widget_set_tooltip_text(win->export_button, "Save as a .tar.gz pack to share");
+    g_signal_connect(win->export_button, "clicked", G_CALLBACK(on_export), win);
     win->save_button = gtk_button_new_with_mnemonic("_Save as Theme…");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(win->save_button), "win.save-current");
     win->try_button = gtk_button_new_with_mnemonic("_Try");
@@ -729,6 +847,7 @@ static GtkWidget *build_details(LxpWindow *win)
     gtk_widget_set_hexpand(spacer, TRUE);
     gtk_box_append(GTK_BOX(actions), win->delete_button);
     gtk_box_append(GTK_BOX(actions), spacer);
+    gtk_box_append(GTK_BOX(actions), win->export_button);
     gtk_box_append(GTK_BOX(actions), win->edit_button);
     gtk_box_append(GTK_BOX(actions), win->save_button);
     gtk_box_append(GTK_BOX(actions), win->try_button);
@@ -786,6 +905,7 @@ static void lxp_window_class_init(LxpWindowClass *klass)
     gtk_widget_class_install_action(widget_class, "win.save-current", NULL,
                                     save_current_activated);
     gtk_widget_class_install_action(widget_class, "win.new-theme", NULL, new_theme_activated);
+    gtk_widget_class_install_action(widget_class, "win.import", NULL, import_activated);
     gtk_widget_class_install_action(widget_class, "win.undo", NULL, undo_activated);
     gtk_widget_class_install_action(widget_class, "win.reload-desktop", NULL,
                                     reload_desktop_activated);
@@ -793,6 +913,8 @@ static void lxp_window_class_init(LxpWindowClass *klass)
     gtk_widget_class_add_binding_action(widget_class, GDK_KEY_F5, 0, "win.refresh", NULL);
     gtk_widget_class_add_binding_action(widget_class, GDK_KEY_n, GDK_CONTROL_MASK,
                                         "win.new-theme", NULL);
+    gtk_widget_class_add_binding_action(widget_class, GDK_KEY_o, GDK_CONTROL_MASK,
+                                        "win.import", NULL);
     gtk_widget_class_add_binding_action(widget_class, GDK_KEY_z, GDK_CONTROL_MASK,
                                         "win.undo", NULL);
 }

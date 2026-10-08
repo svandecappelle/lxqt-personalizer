@@ -32,6 +32,12 @@ LxpTheme *lxp_capture_current(const char *name, const char *const *only,
 gboolean lxp_check_theme(const LxpTheme *theme, const char *const *only,
                          GError **error);
 
+/*
+ * Every problem that would stop <theme> from being applied, one GError
+ * per backend (empty when the theme is ready).
+ */
+GPtrArray *lxp_check_theme_all(const LxpTheme *theme, const char *const *only);
+
 /* Returns the id of the snapshot taken before applying. */
 char    *lxp_apply_theme(const LxpTheme *theme, const char *const *only,
                          LxpApplyFlags flags, GError **error);

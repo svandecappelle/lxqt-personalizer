@@ -1,4 +1,4 @@
-foreach(name ini color theme backends snapshot apply)
+foreach(name ini color theme backends snapshot apply pack)
     add_executable(test-${name} test-${name}.c)
     target_link_libraries(test-${name} PRIVATE lxp)
     target_compile_definitions(test-${name} PRIVATE

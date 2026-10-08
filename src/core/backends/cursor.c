@@ -44,6 +44,11 @@ static gboolean set_xresource(const char *path, const char *resource,
     GStatBuf st;
     int mode = 0644;
 
+    if (strpbrk(value, "\n\r")) {
+        g_set_error(error, LXP_ERROR, LXP_ERROR_INVALID,
+                    "Invalid value for %s", resource);
+        return FALSE;
+    }
     if (!g_file_get_contents(path, &data, NULL, NULL))
         data = g_strdup("");
     if (g_stat(path, &st) == 0)
@@ -108,7 +113,7 @@ static gboolean cursor_check(const LxpTheme *theme, GError **error)
     }
     if (!name)
         return TRUE;
-    return lxp_backend_require(lxp_find_installed("icons", name, "cursors"),
+    return lxp_backend_require(lxp_backend_locate(theme, "icons", name, "cursors"),
                                "Cursor theme", name, error);
 }
 

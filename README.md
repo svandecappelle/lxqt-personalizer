@@ -56,6 +56,23 @@ theme installs `data/` into `~/.local/share`, never over folders it did not
 create (they carry a `.lxp-asset` marker). Themes stay self-contained: the
 wallpaper is copied into the theme folder.
 
+## Sharing themes
+
+```sh
+lxp export my-theme -o my-theme.tar.gz   # theme.ini, wallpaper, data/, preview.png
+lxp import my-theme.tar.gz               # --force replaces an installed theme
+lxp check my-theme                       # what it needs that is missing
+```
+
+A pack bundles the Openbox, GTK and LXQt themes it uses when they are
+installed in your home folder (system themes come from packages). On import
+they are installed only if nothing with that name exists yet.
+
+Packs are treated as untrusted: only regular files and directories are
+extracted, absolute paths and `..` are refused, sizes are limited, bundled
+data may only go to `themes`, `lxqt/themes` and `icons`, and values written
+to configuration files cannot span lines.
+
 ## Application
 
 `lxqt-personalizer` ("Desktop Themes") shows every installed theme with a
@@ -65,7 +82,8 @@ desktop. **Try** applies a theme and reverts after 15 seconds unless you
 keep it; **Apply** applies it; the header bar creates a new theme, saves
 the current desktop as a theme and undoes the last change.
 
-**New Theme** (Ctrl+N) and **Edit Colors…** open the editor: presets,
+**Import Theme…** (Ctrl+O, in the menu) and **Export…** share themes as
+packs. **New Theme** (Ctrl+N) and **Edit Colors…** open the editor: presets,
 color pickers, font, icons, wallpaper and panel options, contrast warnings
 and a live preview of the generated theme.
 
@@ -88,6 +106,7 @@ lxp show my-theme            # print a theme manifest
 lxp preview my-theme -o shot.png   # render the mockup (--current: this desktop)
 lxp new NAME --background … --surface … --foreground … --accent …
 lxp generate my-theme        # regenerate from [Scheme]
+lxp export my-theme | lxp import FILE | lxp check my-theme
 lxp apply my-theme --try 15  # apply, revert unless confirmed within 15 s
 lxp apply my-theme --only openbox,cursor
 lxp reload                   # make running programs reread their config
@@ -108,6 +127,15 @@ after a restart of those apps (or a new session).
 
 Themes are stored in `~/.local/share/lxqt-personalizer/themes/`, snapshots
 in `~/.local/state/lxqt-personalizer/snapshots/`.
+
+## Arch Linux package
+
+```sh
+cd packaging/arch && makepkg -si
+```
+
+The PKGBUILD builds the committed state of this checkout and runs the test
+suite; `LXP_REPO=/path/or/url makepkg -si` builds another clone.
 
 ## Layout
 

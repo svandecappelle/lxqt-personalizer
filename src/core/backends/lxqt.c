@@ -67,10 +67,10 @@ static gboolean lxqt_check(const LxpTheme *theme, GError **error)
     g_autofree char *name = lxp_theme_get_string(theme, GROUP, "theme");
     g_autofree char *icons = lxp_theme_get_string(theme, GROUP, "icon_theme");
 
-    if (name && !lxp_backend_require(lxp_find_installed("lxqt/themes", name, NULL),
+    if (name && !lxp_backend_require(lxp_backend_locate(theme, "lxqt/themes", name, NULL),
                                      "LXQt theme", name, error))
         return FALSE;
-    if (icons && !lxp_backend_require(lxp_find_installed("icons", icons, "index.theme"),
+    if (icons && !lxp_backend_require(lxp_backend_locate(theme, "icons", icons, "index.theme"),
                                       "Icon theme", icons, error))
         return FALSE;
     return TRUE;

@@ -1,0 +1,44 @@
+# Maintainer: Steeve Vandecappelle <steeve.vandecappelle@gmail.com>
+#
+# Builds from this git checkout (committed changes only). To build from
+# another clone or a URL: LXP_REPO=/path/or/url makepkg -si
+
+pkgname=lxqt-personalizer
+pkgver=0.1.0.r0.0000000
+pkgrel=1
+pkgdesc='Create, preview and apply desktop themes for LXQt and Openbox'
+arch=('x86_64' 'aarch64')
+license=('GPL-2.0-or-later')
+depends=('glib2' 'libxml2' 'libarchive' 'cairo' 'pango' 'gdk-pixbuf2' 'librsvg' 'gtk4')
+makedepends=('cmake' 'ninja' 'git')
+optdepends=('lxqt-session: LXQt desktop'
+            'openbox: window decorations'
+            'pcmanfm-qt: desktop wallpaper'
+            'lxqt-panel: panel styling'
+            'xorg-xrdb: reload cursor settings'
+            'picom: rounded corners and shadows')
+_repo="${LXP_REPO:-$(realpath "$startdir/../..")}"
+source=("$pkgname::git+file://$_repo")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  local version
+  version=$(sed -n 's/^ *VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt)
+  printf '%s.r%s.%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cmake -S "$pkgname" -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build build
+}
+
+check() {
+  ctest --test-dir build --output-on-failure
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}

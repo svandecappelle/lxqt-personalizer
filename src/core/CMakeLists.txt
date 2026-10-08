@@ -15,6 +15,7 @@ add_custom_command(
 add_library(lxp STATIC
     ${CMAKE_CURRENT_BINARY_DIR}/lxp-templates.c
     lxp-assets.c
+    lxp-pack.c
     lxp-recolor.c
     lxp-scheme.c
     lxp-template.c
@@ -40,4 +41,4 @@ target_include_directories(lxp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_BINARY_DIR})
 
-target_link_libraries(lxp PUBLIC PkgConfig::GLIB PkgConfig::LIBXML2 m)
+target_link_libraries(lxp PUBLIC PkgConfig::GLIB PkgConfig::LIBXML2 PkgConfig::LIBARCHIVE m)

@@ -20,6 +20,7 @@ include(GNUInstallDirs)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0>=2.76 gio-2.0>=2.76)
 pkg_check_modules(LIBXML2 REQUIRED IMPORTED_TARGET libxml-2.0)
+pkg_check_modules(LIBARCHIVE REQUIRED IMPORTED_TARGET libarchive)
 pkg_check_modules(PREVIEW REQUIRED IMPORTED_TARGET cairo pangocairo gdk-pixbuf-2.0 librsvg-2.0>=2.52)
 
 add_compile_options(
@@ -37,6 +38,9 @@ add_subdirectory(src/cli)
 if(LXP_BUILD_GUI)
     add_subdirectory(src/gui)
 endif()
+
+install(FILES README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/${PROJECT_NAME})
 
 if(LXP_BUILD_TESTS)
     enable_testing()

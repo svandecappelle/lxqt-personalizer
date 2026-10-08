@@ -51,6 +51,21 @@ gboolean lxp_check_theme(const LxpTheme *theme, const char *const *only,
     return TRUE;
 }
 
+GPtrArray *lxp_check_theme_all(const LxpTheme *theme, const char *const *only)
+{
+    GPtrArray *problems = g_ptr_array_new_with_free_func((GDestroyNotify)g_error_free);
+
+    for (const LxpBackend *const *b = lxp_backends_get_all(); *b; b++) {
+        GError *error = NULL;
+
+        if (!usable(*b, only) || !(*b)->check || (*b)->check(theme, &error))
+            continue;
+        prefix_error(&error, *b);
+        g_ptr_array_add(problems, error);
+    }
+    return problems;
+}
+
 char *lxp_apply_theme(const LxpTheme *theme, const char *const *only,
                       LxpApplyFlags flags, GError **error)
 {

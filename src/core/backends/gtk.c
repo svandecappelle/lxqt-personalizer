@@ -164,13 +164,13 @@ static gboolean gtk_check(const LxpTheme *theme, GError **error)
     g_autofree char *found = NULL;
 
     if (name && !g_strv_contains(builtin_themes, name)) {
-        found = lxp_find_installed("themes", name, "gtk-3.0");
+        found = lxp_backend_locate(theme, "themes", name, "gtk-3.0");
         if (!found)
-            found = lxp_find_installed("themes", name, "gtk-2.0");
+            found = lxp_backend_locate(theme, "themes", name, "gtk-2.0");
         if (!lxp_backend_require(g_steal_pointer(&found), "GTK theme", name, error))
             return FALSE;
     }
-    if (icons && !lxp_backend_require(lxp_find_installed("icons", icons, "index.theme"),
+    if (icons && !lxp_backend_require(lxp_backend_locate(theme, "icons", icons, "index.theme"),
                                       "Icon theme", icons, error))
         return FALSE;
     return TRUE;
@@ -219,7 +219,7 @@ static gboolean gtk_apply(const LxpTheme *theme, GError **error)
 
     /* Only point GTK 4 at themes that ship a gtk-4.0 variant. */
     gtk4_theme = name && (g_strv_contains(builtin_themes, name) ||
-                          (gtk4_dir = lxp_find_installed("themes", name, "gtk-4.0")));
+                          (gtk4_dir = lxp_backend_locate(theme, "themes", name, "gtk-4.0")));
     {
         const LxpGtkSetting settings[] = {
             { "gtk-theme-name", name, TRUE, gtk4_theme },
