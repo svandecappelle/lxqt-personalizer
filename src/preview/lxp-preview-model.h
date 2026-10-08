@@ -56,6 +56,13 @@ typedef struct {
     double   panel_opacity;      /* 0..1 */
     LxpColor panel_bg, panel_text;
 
+    /* Compositor (picom); defaults are picom's */
+    int      corner_radius;
+    gboolean shadow;
+    int      shadow_radius;
+    double   shadow_opacity;
+    int      shadow_offset_x, shadow_offset_y;
+
     /* Desktop */
     char    *wallpaper;          /* absolute path or NULL */
     char    *wallpaper_mode;     /* pcmanfm-qt mode */

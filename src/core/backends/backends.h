@@ -9,6 +9,7 @@ extern const LxpBackend lxp_backend_gtk;
 extern const LxpBackend lxp_backend_cursor;
 extern const LxpBackend lxp_backend_wallpaper;
 extern const LxpBackend lxp_backend_panel;
+extern const LxpBackend lxp_backend_compositor;
 
 /* GTK settings shared by the gtk and cursor backends (gtk.c). */
 typedef struct {

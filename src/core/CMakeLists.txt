@@ -23,6 +23,7 @@ add_library(lxp STATIC
     lxp-paths.c
     lxp-fileutil.c
     lxp-ini.c
+    lxp-libconfig.c
     lxp-system.c
     lxp-theme.c
     lxp-themerc.c
@@ -35,7 +36,8 @@ add_library(lxp STATIC
     backends/gtk.c
     backends/cursor.c
     backends/wallpaper.c
-    backends/panel.c)
+    backends/panel.c
+    backends/compositor.c)
 
 target_include_directories(lxp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

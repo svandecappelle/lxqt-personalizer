@@ -241,6 +241,19 @@ static void load_wallpaper(LxpPreviewModel *m, const LxpTheme *theme)
     m->desktop_bg = rgb(0x2b3a4a);
 }
 
+static void load_compositor(LxpPreviewModel *m, const LxpTheme *theme)
+{
+    g_autofree char *shadow = lxp_theme_get_string(theme, "Compositor", "shadow");
+    g_autofree char *opacity = lxp_theme_get_string(theme, "Compositor", "shadow_opacity");
+
+    m->corner_radius = CLAMP(theme_int(theme, "Compositor", "corner_radius", 0), 0, 64);
+    m->shadow = shadow && g_ascii_strcasecmp(shadow, "true") == 0;
+    m->shadow_radius = CLAMP(theme_int(theme, "Compositor", "shadow_radius", 12), 0, 100);
+    m->shadow_opacity = opacity ? CLAMP(g_ascii_strtod(opacity, NULL), 0, 1) : 0.75;
+    m->shadow_offset_x = theme_int(theme, "Compositor", "shadow_offset_x", -15);
+    m->shadow_offset_y = theme_int(theme, "Compositor", "shadow_offset_y", -15);
+}
+
 LxpPreviewModel *lxp_preview_model_new(const LxpTheme *theme)
 {
     LxpPreviewModel *m = g_new0(LxpPreviewModel, 1);
@@ -250,6 +263,7 @@ LxpPreviewModel *lxp_preview_model_new(const LxpTheme *theme)
     load_openbox(m, theme);
     load_panel(m, theme);
     load_wallpaper(m, theme);
+    load_compositor(m, theme);
     return m;
 }
 

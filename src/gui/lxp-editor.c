@@ -54,6 +54,8 @@ typedef struct {
     GtkWidget *wallpaper_mode;
     GtkWidget *panel_position;
     GtkWidget *panel_size;
+    GtkWidget *corner_radius;
+    GtkWidget *shadows;
     GtkWidget *warning;
     GtkWidget *preview;
     GtkWidget *error;
@@ -159,6 +161,14 @@ static void update_theme(Editor *ed)
     lxp_theme_set_string(ed->theme, "Wallpaper", "mode", wallpaper_modes[mode]);
     lxp_theme_set_string(ed->theme, "Panel", "position", panel_positions[position]);
     lxp_theme_set_string(ed->theme, "Panel", "panelSize", size);
+
+    {
+        g_autofree char *radius = g_strdup_printf("%d",
+            gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(ed->corner_radius)));
+        lxp_theme_set_string(ed->theme, "Compositor", "corner_radius", radius);
+        lxp_theme_set_string(ed->theme, "Compositor", "shadow",
+                             gtk_switch_get_active(GTK_SWITCH(ed->shadows)) ? "true" : "false");
+    }
 }
 
 /* Automatic colors show the value that will actually be used. */
@@ -512,6 +522,17 @@ static GtkWidget *build_form(Editor *ed)
     ed->panel_size = gtk_spin_button_new_with_range(16, 96, 2);
     g_signal_connect(ed->panel_size, "value-changed", G_CALLBACK(on_editable_changed), ed);
     attach_row(looks, 5, "Panel size", ed->panel_size, NULL);
+
+    ed->corner_radius = gtk_spin_button_new_with_range(0, 32, 1);
+    gtk_widget_set_tooltip_text(ed->corner_radius, "Drawn by the picom compositor");
+    g_signal_connect(ed->corner_radius, "value-changed", G_CALLBACK(on_editable_changed), ed);
+    attach_row(looks, 6, "Window corners", ed->corner_radius, NULL);
+
+    ed->shadows = gtk_switch_new();
+    gtk_widget_set_halign(ed->shadows, GTK_ALIGN_END);
+    gtk_widget_set_tooltip_text(ed->shadows, "Drawn by the picom compositor");
+    g_signal_connect(ed->shadows, "notify::active", G_CALLBACK(on_changed), ed);
+    attach_row(looks, 7, "Window shadows", ed->shadows, NULL);
     gtk_box_append(GTK_BOX(box), looks);
 
     gtk_widget_set_margin_top(box, 6);
@@ -569,6 +590,8 @@ static void load_form(Editor *ed)
     gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->panel_position),
                                string_index(panel_positions, position ? position : "Bottom"));
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->panel_size), model->panel_size);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->corner_radius), model->corner_radius);
+    gtk_switch_set_active(GTK_SWITCH(ed->shadows), model->shadow);
     ed->loading = FALSE;
 }
 

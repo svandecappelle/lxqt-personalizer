@@ -670,6 +670,42 @@ static void draw_panel(Ctx *ctx)
 #undef AT
 }
 
+/* --- compositor ---------------------------------------------------------- */
+
+/*
+ * picom's shadow: the window shape, blurred by shadow_radius and moved by
+ * the offsets (which already include the blur margin, so -radius centers
+ * it). Approximated with stacked translucent rounded rectangles.
+ */
+static void draw_shadow(Ctx *ctx, Rect w)
+{
+    const LxpPreviewModel *m = ctx->m;
+    int steps = MAX(1, m->shadow_radius);
+    double r = m->shadow_radius;
+    double alpha = 1 - pow(1 - m->shadow_opacity, 1.0 / steps);
+    Rect core = { w.x + m->shadow_offset_x + r, w.y + m->shadow_offset_y + r, w.w, w.h };
+
+    if (!m->shadow || m->shadow_opacity <= 0)
+        return;
+    cairo_set_source_rgba(ctx->cr, 0, 0, 0, alpha);
+    for (int k = steps; k >= 1; k--) {
+        double grow = r * k / steps - r / 2;
+        rounded(ctx->cr, (Rect){ core.x - grow, core.y - grow, core.w + 2 * grow,
+                                 core.h + 2 * grow }, m->corner_radius + MAX(0, grow));
+        cairo_fill(ctx->cr);
+    }
+}
+
+/* Clip what follows to the window's rounded shape; pair with cairo_restore. */
+static void clip_window(Ctx *ctx, Rect w)
+{
+    cairo_save(ctx->cr);
+    if (ctx->m->corner_radius > 0) {
+        rounded(ctx->cr, w, ctx->m->corner_radius);
+        cairo_clip(ctx->cr);
+    }
+}
+
 /* --- scene -------------------------------------------------------------- */
 
 static double clampd(double v, double lo, double hi)
@@ -701,15 +737,21 @@ void lxp_preview_render(cairo_t *cr, const LxpPreviewModel *m, double width, dou
 
     editor = (Rect){ wa.x + wa.w * 0.40, wa.y + 40, 700, 420 };
     editor.x = clampd(editor.x, wa.x, wa.x + wa.w - editor.w);
+    draw_shadow(&ctx, editor);
+    clip_window(&ctx, editor);
     client = draw_frame(&ctx, editor, FALSE, "notes.md — Text Editor",
                         ICON("accessories-text-editor", "text-editor"));
     draw_editor(&ctx, client);
+    cairo_restore(cr);
 
     files = (Rect){ wa.x + 150, wa.y + wa.h - 540, 820, 500 };
     files.y = clampd(files.y, wa.y + 10, wa.y + wa.h - files.h);
+    draw_shadow(&ctx, files);
+    clip_window(&ctx, files);
     client = draw_frame(&ctx, files, TRUE, "Files — Home",
                         ICON("system-file-manager", "folder"));
     draw_files(&ctx, client);
+    cairo_restore(cr);
 
     draw_openbox_menu(&ctx, wa.x + wa.w - 250, wa.y + wa.h - 300);
     draw_panel(&ctx);

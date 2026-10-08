@@ -13,6 +13,7 @@ static const LxpBackend *const all_backends[] = {
     &lxp_backend_cursor,
     &lxp_backend_wallpaper,
     &lxp_backend_panel,
+    &lxp_backend_compositor,
     NULL,
 };
 

@@ -12,6 +12,9 @@ gboolean lxp_run(const char *const *argv, GError **error);
  */
 GStrv    lxp_process_find(const char *name);
 
+/* PID of that process, or 0 if none is running. */
+GPid     lxp_process_pid(const char *name);
+
 /* Value of "--<option>=VALUE" or "--<option> VALUE" in <argv>, or NULL. */
 char    *lxp_argv_option(const char *const *argv, const char *option);
 

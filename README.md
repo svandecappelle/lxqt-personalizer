@@ -13,6 +13,7 @@ covering:
 | `cursor`    | cursor theme and size                      | `lxqt/session.conf`, `~/.icons/default`, `~/.Xresources`, GTK  |
 | `wallpaper` | wallpaper file and mode                    | `~/.config/pcmanfm-qt/<profile>/settings.conf`                |
 | `panel`     | position, size, colors, opacity            | `~/.config/lxqt/panel.conf`                                   |
+| `compositor`| rounded corners, shadows, fading (picom)   | `~/.config/picom.conf`                                        |
 
 Files are edited in place: only themed keys change, everything else
 (comments, layout, unrelated settings) is kept byte for byte.
@@ -93,8 +94,13 @@ reverts if the application crashes or is closed.
 `LXP_SCREENSHOT=shot.png lxqt-personalizer` saves a screenshot of the window
 and quits; add `LXP_SCREENSHOT_ACTION=win.new-theme` to capture the editor.
 
-Rounded window corners and shadows come from a compositor such as picom,
-not from the Openbox theme: Openbox draws square frames.
+Rounded window corners and shadows come from the picom compositor, not
+from the Openbox theme: Openbox draws square frames. The `compositor`
+backend edits only the top-level settings it themes in `picom.conf`
+(`corner-radius`, `shadow*`, `fading`, `inactive-opacity`), keeps comments
+and exclusion lists, makes picom reload with `SIGUSR1`, checks that picom
+actually starts, and warns when your configuration expects picom but it is
+not running. The preview draws the corners and shadows.
 
 ## Usage
 

@@ -149,6 +149,11 @@ static char *describe(const LxpTheme *theme, const char *group)
         return g_strdup_printf("%s, %s px, %s%% opaque", a ? a : "Bottom",
                                b ? b : "32", c ? c : "100");
     }
+    if (g_str_equal(group, "Compositor")) {
+        GET(a, "corner_radius"); GET(b, "shadow");
+        return g_strdup_printf("%s px corners, %s", a ? a : "0",
+                               b && g_str_equal(b, "true") ? "shadows" : "no shadows");
+    }
 #undef GET
     return NULL;
 }
@@ -156,7 +161,7 @@ static char *describe(const LxpTheme *theme, const char *group)
 static void update_details(LxpWindow *win)
 {
     static const char *const groups[] = {
-        "LXQt", "Openbox", "GTK", "Cursor", "Wallpaper", "Panel",
+        "LXQt", "Openbox", "GTK", "Cursor", "Wallpaper", "Panel", "Compositor",
     };
     Entry *e = win->selected;
     GtkWidget *child;

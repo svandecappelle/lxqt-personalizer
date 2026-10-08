@@ -41,13 +41,14 @@ static GStrv read_cmdline(const char *pid)
     return g_strv_builder_end(builder);
 }
 
-GStrv lxp_process_find(const char *name)
+/* First process of this user named <name>: its PID and command line. */
+static GPid find_process(const char *name, GStrv *argv_out)
 {
     g_autoptr(GDir) dir = g_dir_open("/proc", 0, NULL);
     const char *entry;
 
     if (!dir)
-        return NULL;
+        return 0;
     while ((entry = g_dir_read_name(dir))) {
         g_autofree char *proc = NULL;
         g_auto(GStrv) argv = NULL;
@@ -62,10 +63,26 @@ GStrv lxp_process_find(const char *name)
         if (!(argv = read_cmdline(entry)))
             continue;
         base = g_path_get_basename(argv[0]);
-        if (g_str_equal(base, name))
-            return g_steal_pointer(&argv);
+        if (g_str_equal(base, name)) {
+            if (argv_out)
+                *argv_out = g_steal_pointer(&argv);
+            return (GPid)g_ascii_strtoll(entry, NULL, 10);
+        }
     }
-    return NULL;
+    return 0;
+}
+
+GStrv lxp_process_find(const char *name)
+{
+    GStrv argv = NULL;
+
+    find_process(name, &argv);
+    return argv;
+}
+
+GPid lxp_process_pid(const char *name)
+{
+    return find_process(name, NULL);
 }
 
 char *lxp_argv_option(const char *const *argv, const char *option)
