@@ -31,11 +31,14 @@
  *                          red close on hover) or dots (colored circles)
  *   panel_style=pills      task buttons of the generated LXQt theme:
  *                          underline (default), pills or flat
+ *   folder_color=true      folder icons of the icon theme (icons_base=, else
+ *                          the theme's or desktop's icon theme) recolored
+ *                          to the accent, as a generated overlay icon theme
  *   widget_radius=6        corners of buttons, fields and selections in the
  *                          generated Kvantum theme (with style=kvantum)
  *   style=kvantum          optional Qt widget style (default Fusion, which
  *                          follows the palette everywhere)
- *   generate=openbox;gtk;lxqt;kvantum
+ *   generate=openbox;gtk;lxqt;kvantum;terminal
  *                          optional: which themes are generated from the
  *                          colors (default all); for the others the
  *                          theme keeps the installed theme it names
@@ -61,10 +64,12 @@ typedef struct {
     guint32  wallpaper_seed;
     char    *style;
     /* use the installed theme named in the theme instead of generating */
-    gboolean keep_openbox, keep_gtk, keep_lxqt, keep_kvantum;
+    gboolean keep_openbox, keep_gtk, keep_lxqt, keep_kvantum, keep_terminal;
     int      widget_radius;
     gboolean has_widget_radius;  /* else 6 */
     char    *panel_style;        /* NULL: underline */
+    gboolean folder_color;
+    char    *icons_base;         /* icon theme the folder overlay inherits */
 } LxpScheme;
 
 /* Every color the generated files use, derived from a scheme. */

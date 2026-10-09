@@ -15,6 +15,7 @@ static const LxpBackend *const all_backends[] = {
     &lxp_backend_panel,
     &lxp_backend_compositor,
     &lxp_backend_kvantum,
+    &lxp_backend_terminal,
     NULL,
 };
 

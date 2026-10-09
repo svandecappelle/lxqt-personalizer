@@ -2,11 +2,13 @@
 #include "config.h"
 #include "lxp-apply.h"
 #include "lxp-backend.h"
+#include "lxp-catalog.h"
 #include "lxp-fileutil.h"
 #include "lxp-pack.h"
 #include "lxp-paths.h"
 #include "lxp-preview-render.h"
 #include "lxp-scheme.h"
+#include "lxp-surprise.h"
 #include "lxp-themegen.h"
 #include "lxp-wallgen.h"
 #include "lxp-snapshot.h"
@@ -82,6 +84,20 @@ static char *resolve_usable(const char *name, GError **error)
 {
     g_autofree char *dir = lxp_theme_resolve(name, error);
     return dir ? lxp_theme_materialize(dir, error) : NULL;
+}
+
+/* Switch <*dir> to the theme's light/dark variant; FALSE if it has none. */
+static gboolean use_variant(char **dir)
+{
+    char *variant = lxp_theme_variant_dir(*dir);
+
+    if (!variant) {
+        g_printerr("lxp: this theme has no light/dark variant\n");
+        return FALSE;
+    }
+    g_free(*dir);
+    *dir = variant;
+    return TRUE;
 }
 
 static int cmd_backends(int argc, char **argv)
@@ -189,6 +205,12 @@ static gboolean parse_color_option(const char *name, const char *value, LxpColor
     return TRUE;
 }
 
+static gboolean is_theme(const char *dir)
+{
+    g_autofree char *manifest = g_build_filename(dir, LXP_THEME_MANIFEST, NULL);
+    return g_file_test(manifest, G_FILE_TEST_EXISTS);
+}
+
 static int cmd_new(int argc, char **argv)
 {
     g_autofree char *bg = NULL, *surface = NULL, *fg = NULL, *accent = NULL;
@@ -197,10 +219,12 @@ static int cmd_new(int argc, char **argv)
     g_autofree char *wallpaper_style = NULL;
     int seed = 0;
     g_autofree char *output = NULL;
-    gboolean from_current = FALSE, force = FALSE;
+    gboolean from_current = FALSE, force = FALSE, surprise = FALSE;
     const GOptionEntry entries[] = {
         { "from-current", 'c', 0, G_OPTION_ARG_NONE, &from_current,
           "Start from the current desktop (colors default to its palette)", NULL },
+        { "surprise", 0, 0, G_OPTION_ARG_NONE, &surprise,
+          "A random, harmonious design (NAME is optional)", NULL },
         { "background", 0, 0, G_OPTION_ARG_STRING, &bg, "Window background", "COLOR" },
         { "surface", 0, 0, G_OPTION_ARG_STRING, &surface, "Views and entries", "COLOR" },
         { "foreground", 0, 0, G_OPTION_ARG_STRING, &fg, "Text", "COLOR" },
@@ -233,6 +257,29 @@ static int cmd_new(int argc, char **argv)
 
     if (!parse_options("new", "NAME", entries, &argc, &argv))
         return 2;
+
+    if (surprise) {
+        g_autoptr(GRand) rand = g_rand_new();
+        g_autoptr(LxpTheme) random = lxp_theme_new("Surprise");
+        g_autoptr(GPtrArray) styles = lxp_catalog_list(LXP_CATALOG_QT_STYLES);
+        g_autofree char *name = lxp_surprise(random, rand,
+            g_ptr_array_find_with_equal_func(styles, "kvantum", g_str_equal, NULL));
+        g_autofree char *target = NULL;
+
+        if (argc == 2)
+            lxp_theme_set_string(random, LXP_THEME_GROUP, "Name", argv[1]);
+        target = theme_dir_for(lxp_theme_get_name(random), output);
+        if (!force && is_theme(target)) {
+            g_printerr("lxp: %s already exists (use --force to overwrite)\n", target);
+            return 1;
+        }
+        if (!lxp_theme_generate(random, target, LXP_WALLPAPER_WIDTH, LXP_WALLPAPER_HEIGHT,
+                                &error) ||
+            !lxp_theme_save(random, target, &error))
+            return fail(error);
+        g_print("Created “%s” in %s\n", lxp_theme_get_name(random), target);
+        return 0;
+    }
     if (argc != 2) {
         g_printerr("Usage: lxp new [OPTION…] NAME\n");
         return 2;
@@ -374,7 +421,7 @@ static int cmd_preview(int argc, char **argv)
 {
     g_autofree char *output = NULL;
     g_autofree char *size = NULL;
-    gboolean current = FALSE;
+    gboolean current = FALSE, variant = FALSE;
     const GOptionEntry entries[] = {
         { "output", 'o', 0, G_OPTION_ARG_FILENAME, &output,
           "PNG file to write (default: preview.png)", "FILE" },
@@ -382,6 +429,8 @@ static int cmd_preview(int argc, char **argv)
           "Image size (default: 1440x900)", "WxH" },
         { "current", 'c', 0, G_OPTION_ARG_NONE, &current,
           "Preview the current desktop instead of a theme", NULL },
+        { "variant", 0, 0, G_OPTION_ARG_NONE, &variant,
+          "Preview the theme's light/dark variant", NULL },
         G_OPTION_ENTRY_NULL,
     };
     g_autoptr(LxpTheme) theme = NULL;
@@ -402,9 +451,13 @@ static int cmd_preview(int argc, char **argv)
 
     if (current) {
         theme = lxp_capture_current("Current desktop", NULL, NULL);
-    } else if (!(dir = resolve_usable(argv[1], &error)) ||
-               !(theme = lxp_theme_load(dir, &error))) {
-        return fail(error);
+    } else {
+        if (!(dir = resolve_usable(argv[1], &error)))
+            return fail(error);
+        if (variant && !use_variant(&dir))
+            return 1;
+        if (!(theme = lxp_theme_load(dir, &error)))
+            return fail(error);
     }
 
     model = lxp_preview_model_new(theme);
@@ -697,7 +750,7 @@ static int cmd_apply(int argc, char **argv)
 {
     g_autofree char *only_arg = NULL;
     g_auto(GStrv) only = NULL;
-    gboolean no_reload = FALSE, force = FALSE, porcelain = FALSE;
+    gboolean no_reload = FALSE, force = FALSE, porcelain = FALSE, variant = FALSE;
     int try_seconds = 0;
     const GOptionEntry entries[] = {
         { "only", 0, 0, G_OPTION_ARG_STRING, &only_arg,
@@ -710,6 +763,8 @@ static int cmd_apply(int argc, char **argv)
           "Skip checks for missing themes and files", NULL },
         { "porcelain", 0, G_OPTION_FLAG_HIDDEN, G_OPTION_ARG_NONE, &porcelain,
           "Line-based output for frontends", NULL },
+        { "variant", 0, 0, G_OPTION_ARG_NONE, &variant,
+          "Apply the theme's light/dark variant", NULL },
         G_OPTION_ENTRY_NULL,
     };
     g_autofree char *dir = NULL;
@@ -731,8 +786,11 @@ static int cmd_apply(int argc, char **argv)
     }
     selected = (const char *const *)only;
 
-    if (!(dir = resolve_usable(argv[1], &error)) ||
-        !(theme = lxp_theme_load(dir, &error)))
+    if (!(dir = resolve_usable(argv[1], &error)))
+        return fail(error);
+    if (variant && !use_variant(&dir))
+        return 1;
+    if (!(theme = lxp_theme_load(dir, &error)))
         return fail(error);
 
     snapshot = lxp_apply_theme(theme, selected,

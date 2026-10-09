@@ -2,6 +2,7 @@ add_library(lxp-preview STATIC
     lxp-icons.c
     lxp-wallgen.c
     lxp-palette.c
+    lxp-surprise.c
     lxp-themegen.c
     lxp-image.c
     lxp-preview-model.c

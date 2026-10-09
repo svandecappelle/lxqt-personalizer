@@ -2,6 +2,7 @@
 #include "lxp-preview-model.h"
 
 #include "lxp-assets.h"
+#include "lxp-icons.h"
 #include "lxp-ini.h"
 #include "lxp-paths.h"
 #include "lxp-scheme.h"
@@ -108,6 +109,14 @@ static void load_palette(LxpPreviewModel *m, const LxpTheme *theme)
     m->font_size = 10;
     parse_qt_font(font, &m->font_family, &m->font_size);
     m->icon_theme = icons ? g_strdup(icons) : current_icon_theme();
+    {
+        /* a generated icon theme (accent folders) before it is installed */
+        g_autofree char *bundled = lxp_assets_find(theme, "icons", m->icon_theme, "index.theme");
+        if (bundled) {
+            g_autofree char *parent = g_path_get_dirname(bundled);
+            lxp_icons_add_search_dir(parent);
+        }
+    }
 
     /* Kvantum (generated or not) rounds widgets; Fusion barely does */
     {

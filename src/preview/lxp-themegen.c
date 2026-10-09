@@ -2,6 +2,9 @@
 #include "lxp-themegen.h"
 
 #include "lxp-error.h"
+#include "lxp-icons.h"
+#include "lxp-image.h"
+#include "lxp-palette.h"
 #include "lxp-fileutil.h"
 #include "lxp-paths.h"
 #include "lxp-scheme.h"
@@ -22,8 +25,106 @@ static char *wallpaper_key(const LxpSchemeColors *c, const char *style, guint32 
                            c->dark);
 }
 
+static gboolean generate_wallpaper(LxpTheme *theme, const char *dir, int width, int height,
+                                   GError **error);
+
+char *lxp_theme_variant_dir(const char *dir)
+{
+    g_autofree char *variant = g_build_filename(dir, LXP_VARIANT_DIR, NULL);
+    g_autofree char *manifest = g_build_filename(variant, LXP_THEME_MANIFEST, NULL);
+
+    return g_file_test(manifest, G_FILE_TEST_IS_REGULAR) ? g_steal_pointer(&variant) : NULL;
+}
+
+/*
+ * The opposite light/dark version of <theme>: same settings, colors
+ * flipped, named "<Name> Dark" or "<Name> Light", generated in <dir>.
+ */
+static gboolean generate_variant(LxpTheme *theme, const char *dir, int width, int height,
+                                 GError **error)
+{
+    g_autofree char *data = lxp_theme_to_data(theme);
+    g_autoptr(GKeyFile) kf = g_key_file_new();
+    g_autoptr(LxpTheme) variant = NULL;
+    g_autofree char *name = NULL;
+    g_autofree char *file = NULL;
+    LxpScheme s, flipped;
+    LxpSchemeColors c;
+    gboolean ok;
+
+    if (!lxp_scheme_load(theme, &s, error))
+        return FALSE;
+    lxp_scheme_derive(&s, &c);
+    name = g_strdup_printf("%s %s", lxp_theme_get_name(theme), c.dark ? "Light" : "Dark");
+
+    /* a copy of the theme, then flipped colors */
+    variant = lxp_theme_new(name);
+    if (!g_key_file_load_from_data(lxp_theme_get_keyfile(variant), data, -1,
+                                   G_KEY_FILE_KEEP_COMMENTS, error)) {
+        lxp_scheme_clear(&s);
+        return FALSE;
+    }
+    lxp_theme_set_string(variant, LXP_THEME_GROUP, "Name", name);
+    lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "variant", NULL);
+    /* the GTK dark preference follows the flipped colors */
+    lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "prefer_dark", NULL);
+
+    flipped = s;
+    flipped.font = flipped.title_font = flipped.gtk_font = flipped.prefer_dark = NULL;
+    flipped.style = flipped.wallpaper = flipped.title_style = flipped.title_align = NULL;
+    flipped.buttons = flipped.panel_style = NULL;
+    lxp_palette_flip(&flipped);
+    {
+        g_autofree char *bg = lxp_color_to_hex(&flipped.background);
+        g_autofree char *surface = lxp_color_to_hex(&flipped.surface);
+        g_autofree char *fg = lxp_color_to_hex(&flipped.foreground);
+        g_autofree char *accent = lxp_color_to_hex(&flipped.accent);
+        static const char *const optional[] = { "accent_text", "title", "panel", "link" };
+
+        lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "background", bg);
+        lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "surface", surface);
+        lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "foreground", fg);
+        lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "accent", accent);
+        for (gsize i = 0; i < G_N_ELEMENTS(optional); i++)
+            lxp_theme_set_string(variant, LXP_SCHEME_GROUP, optional[i], NULL);
+    }
+    lxp_scheme_clear(&s);
+
+    /* an image wallpaper is shared with the main theme */
+    file = lxp_theme_get_string(variant, "Wallpaper", "file");
+    if (file && !g_path_is_absolute(file) && g_strcmp0(file, LXP_GENERATED_WALLPAPER) != 0) {
+        g_autofree char *up = g_build_filename("..", file, NULL);
+        lxp_theme_set_string(variant, "Wallpaper", "file", up);
+    }
+
+    ok = lxp_scheme_generate(variant, dir, error) &&
+         generate_wallpaper(variant, dir, width, height, error) &&
+         lxp_theme_save(variant, dir, error);
+    return ok;
+}
+
 gboolean lxp_theme_generate(LxpTheme *theme, const char *dir, int width, int height,
                             GError **error)
+{
+    g_autofree char *variant_dir = g_build_filename(dir, LXP_VARIANT_DIR, NULL);
+    g_autofree char *want = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "variant");
+
+    if (!lxp_scheme_generate(theme, dir, error) ||
+        !generate_wallpaper(theme, dir, width, height, error))
+        return FALSE;
+    /* recolored icons may sit at the same paths as before */
+    lxp_icons_reset();
+    lxp_image_cache_clear();
+
+    if (!lxp_remove_tree(variant_dir, error))
+        return FALSE;
+    if (want && g_ascii_strcasecmp(want, "true") == 0)
+        return generate_variant(theme, variant_dir, width, height, error);
+    return TRUE;
+}
+
+static gboolean generate_wallpaper(LxpTheme *theme, const char *dir, int width, int height,
+                                   GError **error)
 {
     LxpScheme s;
     LxpSchemeColors c;
@@ -34,8 +135,6 @@ gboolean lxp_theme_generate(LxpTheme *theme, const char *dir, int width, int hei
     g_autofree char *current = NULL;
     gboolean ok = TRUE;
 
-    if (!lxp_scheme_generate(theme, dir, error))
-        return FALSE;
     if (!lxp_scheme_load(theme, &s, error))
         return FALSE;
 

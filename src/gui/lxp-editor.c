@@ -9,6 +9,7 @@
 #include "lxp-paths.h"
 #include "lxp-preview-area.h"
 #include "lxp-scheme.h"
+#include "lxp-surprise.h"
 #include "lxp-themegen.h"
 #include "lxp-wallgen.h"
 
@@ -103,6 +104,7 @@ typedef struct {
     GtkWidget *name;
     GtkWidget *background, *surface, *foreground, *accent;
     GtkWidget *author, *comment;
+    GtkWidget *variant, *variant_label;
     OptionalColor accent_text, title, panel_color, link;
     GtkWidget *warning;
 
@@ -116,6 +118,7 @@ typedef struct {
     GtkWidget *tool_buttons;
     GtkWidget *widget_radius;
     GtkWidget *icons_follow;
+    GtkWidget *folder_color;
     GtkWidget *cursor_size;
     GtkWidget *font;
 
@@ -367,6 +370,8 @@ static void read_form(Editor *ed, LxpScheme *s)
     s->keep_gtk = choice_get(&ed->gtk) != NULL;
     s->keep_lxqt = choice_get(&ed->lxqt) != NULL;
     s->keep_kvantum = choice_get(&ed->kvantum) != NULL;
+    s->folder_color = gtk_switch_get_active(GTK_SWITCH(ed->folder_color));
+    s->icons_base = g_strdup(choice_get(&ed->icons));
     s->widget_radius = spin_value(ed->widget_radius);
     s->panel_style = g_strdup(panel_style_values[
         MIN(gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->panel_style)), 2u)]);
@@ -396,6 +401,8 @@ static void update_theme(Editor *ed)
     lxp_scheme_clear(&s);
 
     lxp_theme_set_string(t, LXP_THEME_GROUP, "Name", *name ? name : "Untitled");
+    lxp_theme_set_string(t, LXP_SCHEME_GROUP, "variant",
+                         gtk_switch_get_active(GTK_SWITCH(ed->variant)) ? "true" : NULL);
     value = gtk_editable_get_text(GTK_EDITABLE(ed->author));
     lxp_theme_set_string(t, LXP_THEME_GROUP, "Author", *value ? value : NULL);
     value = gtk_editable_get_text(GTK_EDITABLE(ed->comment));
@@ -543,6 +550,8 @@ static void update_warning(Editor *ed)
 
     read_form(ed, &s);
     lxp_scheme_derive(&s, &c);
+    gtk_label_set_text(GTK_LABEL(ed->variant_label),
+                       c.dark ? "Also make a light version" : "Also make a dark version");
     if (lxp_color_contrast(&c.fg, &c.bg) < 4.5)
         g_string_append(text, "Text is hard to read on the background. ");
     if (lxp_color_contrast(&c.fg, &c.surface) < 4.5)
@@ -705,6 +714,29 @@ static void on_harmony(GtkButton *button, gpointer data)
     LxpColor next = lxp_palette_harmony(&accent, harmony);
 
     set_button(ed->accent, &next);
+}
+
+static void load_form(Editor *ed);
+
+static void on_surprise(GtkButton *button, gpointer data)
+{
+    Editor *ed = data;
+    g_autoptr(GRand) rand = g_rand_new();
+    g_autoptr(GPtrArray) styles = lxp_catalog_list(LXP_CATALOG_QT_STYLES);
+    gboolean kvantum = g_ptr_array_find_with_equal_func(styles, "kvantum", g_str_equal, NULL);
+    g_autofree char *name = lxp_surprise(ed->theme, rand, kvantum);
+
+    /* the surprise replaces the image wallpaper and the installed choices */
+    lxp_theme_remove_group(ed->theme, "Wallpaper");
+    load_form(ed);
+    ed->loading = TRUE;
+    gtk_editable_set_text(GTK_EDITABLE(ed->name), name);
+    choice_set(&ed->openbox, NULL);
+    choice_set(&ed->gtk, NULL);
+    choice_set(&ed->lxqt, NULL);
+    choice_set(&ed->kvantum, NULL);
+    ed->loading = FALSE;
+    schedule_preview(ed);
 }
 
 static void on_shuffle(GtkButton *button, gpointer data)
@@ -942,6 +974,8 @@ static void build_colors_page(Editor *ed, GtkWidget *box)
             { "Light ⇄ Dark", "Turn a dark scheme light and back, keeping its hues", G_CALLBACK(on_flip), -1 },
             { "Opposite accent", "Accent with the complementary hue", G_CALLBACK(on_harmony), LXP_HARMONY_COMPLEMENTARY },
             { "Nearby accent", "Accent with a neighbouring hue", G_CALLBACK(on_harmony), LXP_HARMONY_ANALOGOUS },
+            { "Surprise me", "A random, harmonious design: colors, windows, panel, "
+                             "wallpaper and effects", G_CALLBACK(on_surprise), -1 },
         };
 
         gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(tools), GTK_SELECTION_NONE);
@@ -974,6 +1008,13 @@ static void build_colors_page(Editor *ed, GtkWidget *box)
     optional_row(ed, optional, 1, "Title bars", &ed->title);
     optional_row(ed, optional, 2, "Panel", &ed->panel_color);
     optional_row(ed, optional, 3, "Links", &ed->link);
+    ed->variant_label = gtk_label_new("Also make a dark version");
+    gtk_label_set_xalign(GTK_LABEL(ed->variant_label), 0);
+    gtk_widget_set_hexpand(ed->variant_label, TRUE);
+    ed->variant = toggle(ed, "The theme gets a light/dark switch; the other version uses the "
+                             "same settings with flipped colors");
+    gtk_grid_attach(GTK_GRID(optional), ed->variant_label, 0, 4, 2, 1);
+    gtk_grid_attach(GTK_GRID(optional), ed->variant, 2, 4, 1, 1);
     gtk_box_append(GTK_BOX(box), optional);
 
     ed->warning = gtk_label_new(NULL);
@@ -1051,6 +1092,9 @@ static void build_appearance_page(Editor *ed, GtkWidget *box)
     attach_row(apps, 6, "Toolbar buttons", ed->tool_buttons, NULL);
     ed->icons_follow = toggle(ed, "Recolor symbolic icons to match the text color");
     attach_row(apps, 7, "Icons follow colors", ed->icons_follow, NULL);
+    ed->folder_color = toggle(ed, "Folder icons of the chosen icon theme in the accent color "
+                                  "(SVG icon themes such as Breeze or Papirus)");
+    attach_row(apps, 9, "Folders in accent color", ed->folder_color, NULL);
     gtk_box_append(GTK_BOX(box), apps);
 
     gtk_box_append(GTK_BOX(box), section("GTK Applications"));
@@ -1220,6 +1264,7 @@ static void load_form(Editor *ed)
     g_autofree char *kvantum = lxp_theme_get_string(t, "Kvantum", "theme");
     g_autofree char *author = lxp_theme_get_string(t, LXP_THEME_GROUP, "Author");
     g_autofree char *comment = lxp_theme_get_string(t, LXP_THEME_GROUP, "Comment");
+    g_autofree char *variant = lxp_theme_get_string(t, LXP_SCHEME_GROUP, "variant");
     g_autofree char *keep_border = lxp_theme_get_string(t, "Openbox", "keep_border");
     g_autofree char *iconify = lxp_theme_get_string(t, "Openbox", "animate_iconify");
     g_autofree char *tool_buttons = lxp_theme_get_string(t, "LXQt", "tool_button_style");
@@ -1234,6 +1279,7 @@ static void load_form(Editor *ed)
     gtk_editable_set_text(GTK_EDITABLE(ed->name), ed->dir ? lxp_theme_get_name(t) : "");
     gtk_editable_set_text(GTK_EDITABLE(ed->author), ed->dir && author ? author : "");
     gtk_editable_set_text(GTK_EDITABLE(ed->comment), ed->dir && comment ? comment : "");
+    gtk_switch_set_active(GTK_SWITCH(ed->variant), variant && g_str_equal(variant, "true"));
 
     /* The theme's own scheme, else its palette, else what the preview shows. */
     if (!lxp_scheme_load(t, &s, NULL) && !lxp_scheme_from_palette(t, &s)) {
@@ -1278,8 +1324,12 @@ static void load_form(Editor *ed)
     /* the scheme's radius, else the default for a generated Kvantum theme */
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->widget_radius),
                               s.has_widget_radius ? s.widget_radius : 6);
-    if (icons)
+    /* with accent folders, the theme's icon theme is the generated overlay */
+    if (s.icons_base)
+        choice_set(&ed->icons, s.icons_base);
+    else if (icons && !g_str_has_prefix(icons, "lxp-"))
         choice_set(&ed->icons, icons);
+    gtk_switch_set_active(GTK_SWITCH(ed->folder_color), s.folder_color);
     if (cursor)
         choice_set(&ed->cursor, cursor);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->cursor_size),

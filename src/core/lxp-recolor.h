@@ -25,6 +25,14 @@ char    *lxp_recolor_css(const char *css, const LxpRecolorPalette *from,
                          const LxpRecolorPalette *to);
 
 /*
+ * Shift colors whose hue is within <range> degrees of <from> to the hue of
+ * <to>, keeping their relative saturation and shading (icons: folder blue
+ * to the accent). Neutral colors are kept.
+ */
+char    *lxp_recolor_hue(const char *text, const LxpColor *from, const LxpColor *to,
+                         double range);
+
+/*
  * Read the source palette from GTK's own "@define-color theme_bg_color"
  * (theme_base_color, theme_fg_color, theme_selected_bg_color) lines.
  */

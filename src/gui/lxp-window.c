@@ -23,7 +23,20 @@ typedef struct {
     char *source;       /* built-ins: the read-only original */
     gboolean builtin;
     LxpTheme *theme;
+    char *variant_dir;      /* its light/dark variant, if any */
+    LxpTheme *variant;
+    gboolean show_variant;  /* the variant is the one shown and applied */
 } Entry;
+
+static LxpTheme *shown_theme(const Entry *e)
+{
+    return e->show_variant && e->variant ? e->variant : e->theme;
+}
+
+static const char *shown_dir(const Entry *e)
+{
+    return e->show_variant && e->variant ? e->variant_dir : e->dir;
+}
 
 struct _LxpWindow {
     GtkApplicationWindow parent;
@@ -41,6 +54,9 @@ struct _LxpWindow {
     GtkWidget *export_button;
     GtkWidget *parts_button;
     GtkWidget *missing;
+    GtkWidget *variant_box;
+    GtkWidget *variant_main, *variant_other;
+    gboolean updating_variant;
     LxpPackFlags export_flags;
     GtkWidget *save_button;
     GtkWidget *spinner;
@@ -66,6 +82,8 @@ G_DEFINE_FINAL_TYPE(LxpWindow, lxp_window, GTK_TYPE_APPLICATION_WINDOW)
 static void entry_free(Entry *e)
 {
     g_free(e->dir);
+    g_free(e->variant_dir);
+    lxp_theme_free(e->variant);
     g_free(e->source);
     lxp_theme_free(e->theme);
     g_free(e);
@@ -103,7 +121,7 @@ static void swatches_draw(GtkDrawingArea *area, cairo_t *cr, int width, int heig
 
     if (!win->selected)
         return;
-    m = lxp_preview_model_new(win->selected->theme);
+    m = lxp_preview_model_new(shown_theme(win->selected));
     colors[0] = &m->window;
     colors[1] = &m->base;
     colors[2] = &m->text;
@@ -202,11 +220,11 @@ static void update_details(LxpWindow *win)
         gtk_label_set_text(GTK_LABEL(win->subtitle),
                            "What your desktop looks like right now");
     }
-    lxp_preview_area_set_model(win->preview, lxp_preview_model_new(e->theme));
+    lxp_preview_area_set_model(win->preview, lxp_preview_model_new(shown_theme(e)));
     gtk_widget_queue_draw(win->swatches);
 
     for (gsize i = 0; i < G_N_ELEMENTS(groups); i++) {
-        g_autofree char *text = describe(e->theme, groups[i]);
+        g_autofree char *text = describe(shown_theme(e), groups[i]);
         GtkWidget *key, *value;
 
         if (!text)
@@ -224,7 +242,7 @@ static void update_details(LxpWindow *win)
     }
 
     if (e->dir) {
-        g_autoptr(GPtrArray) problems = lxp_check_theme_all(e->theme, NULL);
+        g_autoptr(GPtrArray) problems = lxp_check_theme_all(shown_theme(e), NULL);
         g_autoptr(GString) text = g_string_new(NULL);
 
         for (guint i = 0; i < problems->len; i++)
@@ -234,6 +252,20 @@ static void update_details(LxpWindow *win)
         gtk_widget_set_visible(win->missing, problems->len > 0);
     } else {
         gtk_widget_set_visible(win->missing, FALSE);
+    }
+
+    gtk_widget_set_visible(win->variant_box, e->variant != NULL);
+    if (e->variant) {
+        g_autoptr(LxpPreviewModel) main_model = lxp_preview_model_new(e->theme);
+        gboolean main_dark = lxp_color_luminance(&main_model->window) <
+                             lxp_color_luminance(&main_model->window_text);
+
+        gtk_button_set_label(GTK_BUTTON(win->variant_main), main_dark ? "Dark" : "Light");
+        gtk_button_set_label(GTK_BUTTON(win->variant_other), main_dark ? "Light" : "Dark");
+        win->updating_variant = TRUE;
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(win->variant_other), e->show_variant);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(win->variant_main), !e->show_variant);
+        win->updating_variant = FALSE;
     }
 
     gtk_widget_set_visible(win->apply_button, e->dir != NULL);
@@ -252,6 +284,23 @@ static void update_details(LxpWindow *win)
 }
 
 /* --- gallery ------------------------------------------------------------ */
+
+static void load_variant(Entry *e)
+{
+    e->variant_dir = lxp_theme_variant_dir(e->dir);
+    if (e->variant_dir && !(e->variant = lxp_theme_load(e->variant_dir, NULL)))
+        g_clear_pointer(&e->variant_dir, g_free);
+}
+
+static void on_variant_toggled(GtkToggleButton *button, gpointer user)
+{
+    LxpWindow *win = user;
+
+    if (win->updating_variant || !win->selected || !gtk_toggle_button_get_active(button))
+        return;
+    win->selected->show_variant = GTK_WIDGET(button) == win->variant_other;
+    update_details(win);
+}
 
 static GtkWidget *make_card(Entry *e)
 {
@@ -306,6 +355,7 @@ static void reload_gallery(LxpWindow *win, const char *select_dir)
         e = g_new0(Entry, 1);
         e->dir = g_steal_pointer(&dir);
         e->theme = theme;
+        load_variant(e);
         g_ptr_array_add(win->entries, e);
     }
 
@@ -329,6 +379,7 @@ static void reload_gallery(LxpWindow *win, const char *select_dir)
             e->source = g_strdup(builtin->pdata[i]);
             e->builtin = TRUE;
             e->theme = theme;
+            load_variant(e);
             g_ptr_array_add(win->entries, e);
         }
     }
@@ -533,13 +584,14 @@ static void start_apply_only(LxpWindow *win, gboolean try_mode, const char *only
 
     if (!win->selected || !win->selected->dir)
         return;
-    g_strv_builder_add_many(builder, "apply", win->selected->dir, "--porcelain", NULL);
+    g_strv_builder_add_many(builder, "apply", shown_dir(win->selected), "--porcelain", NULL);
     if (try_mode)
         g_strv_builder_add_many(builder, "--try", seconds, NULL);
     if (only)
         g_strv_builder_add_many(builder, "--only", only, NULL);
     args = g_strv_builder_end(builder);
-    run_lxp(win, (const char *const *)args, lxp_theme_get_name(win->selected->theme), try_mode);
+    run_lxp(win, (const char *const *)args, lxp_theme_get_name(shown_theme(win->selected)),
+            try_mode);
 }
 
 static void start_apply(LxpWindow *win, gboolean try_mode)
@@ -1119,6 +1171,20 @@ static GtkWidget *build_details(LxpWindow *win)
     gtk_label_set_xalign(GTK_LABEL(win->subtitle), 0);
     gtk_label_set_ellipsize(GTK_LABEL(win->subtitle), PANGO_ELLIPSIZE_MIDDLE);
 
+    win->variant_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(win->variant_box, "linked");
+    gtk_widget_set_halign(win->variant_box, GTK_ALIGN_START);
+    win->variant_main = gtk_toggle_button_new_with_label("Light");
+    win->variant_other = gtk_toggle_button_new_with_label("Dark");
+    gtk_toggle_button_set_group(GTK_TOGGLE_BUTTON(win->variant_other),
+                                GTK_TOGGLE_BUTTON(win->variant_main));
+    g_signal_connect(win->variant_main, "toggled", G_CALLBACK(on_variant_toggled), win);
+    g_signal_connect(win->variant_other, "toggled", G_CALLBACK(on_variant_toggled), win);
+    gtk_box_append(GTK_BOX(win->variant_box), win->variant_main);
+    gtk_box_append(GTK_BOX(win->variant_box), win->variant_other);
+    gtk_widget_set_tooltip_text(win->variant_box, "This theme comes in light and dark");
+    gtk_widget_set_visible(win->variant_box, FALSE);
+
     win->swatches = gtk_drawing_area_new();
     gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(win->swatches), 18);
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(win->swatches), swatches_draw, win, NULL);
@@ -1173,6 +1239,7 @@ static GtkWidget *build_details(LxpWindow *win)
     gtk_box_append(GTK_BOX(box), win->preview);
     gtk_box_append(GTK_BOX(box), win->title);
     gtk_box_append(GTK_BOX(box), win->subtitle);
+    gtk_box_append(GTK_BOX(box), win->variant_box);
     gtk_box_append(GTK_BOX(box), win->swatches);
     gtk_box_append(GTK_BOX(box), win->details);
     gtk_box_append(GTK_BOX(box), win->missing);

@@ -14,3 +14,9 @@ const char *lxp_icon_lookup(const char *theme, const char *const *names, int siz
 
 /* Names of installed icon themes (not cursor-only ones), sorted. */
 GPtrArray  *lxp_icon_themes_list(void);
+
+/* Also look for icon themes in <dir> (e.g. a theme's own data/icons). */
+void        lxp_icons_add_search_dir(const char *dir);
+
+/* Forget what is known about icon themes (after generating new icons). */
+void        lxp_icons_reset(void);

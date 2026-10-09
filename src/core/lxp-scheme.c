@@ -3,7 +3,11 @@
 
 #include "lxp-error.h"
 #include "lxp-fileutil.h"
+#include "lxp-iconcolor.h"
+#include "lxp-ini.h"
+#include "lxp-paths.h"
 #include "lxp-kvantum-gen.h"
+#include "lxp-terminal-gen.h"
 #include "lxp-recolor.h"
 #include "lxp-template.h"
 #include "lxp-xbm.h"
@@ -51,6 +55,11 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
     s->prefer_dark = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "prefer_dark");
     s->title_style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_style");
     s->panel_style = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "panel_style");
+    s->icons_base = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "icons_base");
+    {
+        g_autofree char *folders = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "folder_color");
+        s->folder_color = folders && g_ascii_strcasecmp(folders, "true") == 0;
+    }
     s->title_align = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_align");
     s->buttons = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "buttons");
     {
@@ -77,6 +86,7 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
         s->keep_gtk = !all && !g_strv_contains((const char *const *)parts, "gtk");
         s->keep_lxqt = !all && !g_strv_contains((const char *const *)parts, "lxqt");
         s->keep_kvantum = !all && !g_strv_contains((const char *const *)parts, "kvantum");
+        s->keep_terminal = !all && !g_strv_contains((const char *const *)parts, "terminal");
     }
     return TRUE;
 }
@@ -108,6 +118,10 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
                          s->title_style && *s->title_style ? s->title_style : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "panel_style",
                          s->panel_style && *s->panel_style ? s->panel_style : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "folder_color",
+                         s->folder_color ? "true" : NULL);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "icons_base",
+                         s->icons_base && *s->icons_base ? s->icons_base : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_align",
                          s->title_align && *s->title_align ? s->title_align : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "buttons",
@@ -136,10 +150,11 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "style",
                          s->style && *s->style ? s->style : NULL);
 
-    if (!s->keep_openbox && !s->keep_gtk && !s->keep_lxqt && !s->keep_kvantum) {
+    if (!s->keep_openbox && !s->keep_gtk && !s->keep_lxqt && !s->keep_kvantum &&
+        !s->keep_terminal) {
         lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "generate", NULL);
     } else {
-        const char *parts[5];
+        const char *parts[6];
         int n = 0;
 
         if (!s->keep_openbox)
@@ -150,6 +165,8 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
             parts[n++] = "lxqt";
         if (!s->keep_kvantum)
             parts[n++] = "kvantum";
+        if (!s->keep_terminal)
+            parts[n++] = "terminal";
         parts[n] = NULL;
         lxp_theme_set_string_list(theme, LXP_SCHEME_GROUP, "generate", parts);
     }
@@ -185,6 +202,7 @@ void lxp_scheme_clear(LxpScheme *s)
     g_clear_pointer(&s->wallpaper, g_free);
     g_clear_pointer(&s->title_style, g_free);
     g_clear_pointer(&s->panel_style, g_free);
+    g_clear_pointer(&s->icons_base, g_free);
     g_clear_pointer(&s->title_align, g_free);
     g_clear_pointer(&s->buttons, g_free);
     g_clear_pointer(&s->style, g_free);
@@ -737,6 +755,68 @@ static gboolean remove_stale_units(const char *dir, const char *kind, const char
     return TRUE;
 }
 
+/* The icon theme the desktop uses now: the highest lxqt.conf layer naming one. */
+static char *desktop_icon_theme(void)
+{
+    g_autoptr(GPtrArray) layers = lxp_paths_find_config_layers("lxqt/lxqt.conf");
+
+    for (guint i = layers->len; i > 0; i--) {
+        g_autoptr(LxpIni) ini = lxp_ini_load(g_ptr_array_index(layers, i - 1), FALSE, NULL);
+        const char *name = ini ? lxp_ini_get(ini, "General", "icon_theme") : NULL;
+
+        if (name && *name)
+            return g_strdup(name);
+    }
+    return NULL;
+}
+
+/*
+ * data/icons/<name>: folders in the accent color, over the base icon
+ * theme. Without SVG folder icons in the base, the theme keeps the base.
+ */
+static gboolean generate_folders(LxpTheme *theme, const char *dir, const char *name,
+                                 const LxpScheme *s, const LxpSchemeColors *c, GError **error)
+{
+    g_autofree char *icons_dir = g_build_filename(dir, "data", "icons", name, NULL);
+    g_autofree char *current = lxp_theme_get_string(theme, "LXQt", "icon_theme");
+    g_autofree char *base = NULL;
+    g_autoptr(GError) local = NULL;
+
+    if (!lxp_remove_tree(icons_dir, error))
+        return FALSE;
+
+    /* the base: remembered, else what the theme or the desktop uses */
+    if (s->icons_base && *s->icons_base)
+        base = g_strdup(s->icons_base);
+    else if (current && !g_str_has_prefix(current, "lxp-"))
+        base = g_strdup(current);
+    else
+        base = desktop_icon_theme();
+
+    if (!s->folder_color || !base) {
+        /* back to the plain icon theme if the overlay was in use */
+        if (base && g_strcmp0(current, name) == 0) {
+            lxp_theme_set_string(theme, "LXQt", "icon_theme", base);
+            lxp_theme_set_string(theme, "GTK", "icon_theme", base);
+        }
+        return TRUE;
+    }
+
+    if (!write_marker(icons_dir, error))
+        return FALSE;
+    if (!lxp_icons_folder_overlay(base, &c->accent, name, icons_dir, &local)) {
+        if (!g_error_matches(local, LXP_ERROR, LXP_ERROR_NOT_FOUND)) {
+            g_propagate_error(error, g_steal_pointer(&local));
+            return FALSE;
+        }
+        return lxp_remove_tree(icons_dir, error);  /* nothing to recolor */
+    }
+    lxp_theme_set_string(theme, "LXQt", "icon_theme", name);
+    lxp_theme_set_string(theme, "GTK", "icon_theme", name);
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "icons_base", base);
+    return TRUE;
+}
+
 /* Same for config/<kind> (the Kvantum themes). */
 static gboolean remove_stale_config_units(const char *dir, const char *kind, const char *keep,
                                           GError **error)
@@ -788,6 +868,20 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
          lxp_remove_tree(themes_dir, error) && lxp_remove_tree(lxqt_dir, error) &&
          lxp_remove_tree(kvantum_dir, error);
 
+    /* data/qtermwidget6/color-schemes/<name>.colorscheme for QTerminal */
+    if (ok) {
+        g_autofree char *file = g_strconcat(name, ".colorscheme", NULL);
+        g_autofree char *schemes = g_build_filename(dir, "data", "qtermwidget6", "color-schemes",
+                                                    NULL);
+        g_autofree char *path = g_build_filename(schemes, file, NULL);
+
+        ok = lxp_remove_tree(schemes, error);
+        if (ok && !s.keep_terminal) {
+            g_autofree char *text = lxp_terminal_colorscheme(&c, lxp_theme_get_name(theme));
+            ok = lxp_write_atomic(path, text, -1, 0644, error);
+        }
+    }
+
     /* config/Kvantum/<name>: rounded Qt widgets in the scheme's colors */
     if (ok && gen_kvantum)
         ok = write_marker(kvantum_dir, error) &&
@@ -811,9 +905,15 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
                             "lxqt-notificationd.qss", error);
 
     if (ok) {
+        ok = remove_stale_units(dir, "icons", name, error) &&
+             generate_folders(theme, dir, name, &s, &c, error);
+    }
+    if (ok) {
         set_theme_keys(theme, name, &s, &c);
         if (gen_kvantum)
             lxp_theme_set_string(theme, "Kvantum", "theme", name);
+        if (!s.keep_terminal)
+            lxp_theme_set_string(theme, "Terminal", "color_scheme", name);
     }
     lxp_scheme_clear(&s);
     return ok;

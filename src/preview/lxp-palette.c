@@ -129,12 +129,25 @@ gboolean lxp_palette_from_image(const char *path, gboolean dark, LxpScheme *s)
     return TRUE;
 }
 
-static LxpColor invert_lightness(const LxpColor *c)
+/*
+ * Inverted lightness, compressed into comfortable ranges: no pure black
+ * or white backgrounds, text well readable.
+ */
+static LxpColor flip_background(const LxpColor *c, gboolean to_dark)
 {
     double h, sat, l;
 
     lxp_color_to_hsl(c, &h, &sat, &l);
-    return lxp_color_from_hsl(h, sat, 1 - l, 1);
+    return lxp_color_from_hsl(h, sat, to_dark ? 0.10 + (1 - l) * 0.8 : 1 - l * 0.35, 1);
+}
+
+static LxpColor flip_text(const LxpColor *c, gboolean to_dark)
+{
+    double h, sat, l;
+
+    lxp_color_to_hsl(c, &h, &sat, &l);
+    return lxp_color_from_hsl(h, sat, to_dark ? MAX(0.85, 1 - l * 0.6) : MIN(0.25, (1 - l) * 1.9),
+                              1);
 }
 
 void lxp_palette_flip(LxpScheme *s)
@@ -142,9 +155,9 @@ void lxp_palette_flip(LxpScheme *s)
     gboolean to_dark = lxp_color_luminance(&s->background) > lxp_color_luminance(&s->foreground);
     double h, sat, l;
 
-    s->background = invert_lightness(&s->background);
-    s->surface = invert_lightness(&s->surface);
-    s->foreground = invert_lightness(&s->foreground);
+    s->background = flip_background(&s->background, to_dark);
+    s->surface = flip_background(&s->surface, to_dark);
+    s->foreground = flip_text(&s->foreground, to_dark);
     lxp_color_to_hsl(&s->accent, &h, &sat, &l);
     s->accent = lxp_color_from_hsl(h, sat, to_dark ? MAX(l, 0.6) : MIN(l, 0.45), 1);
     reset_optional(s);

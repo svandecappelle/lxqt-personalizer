@@ -148,8 +148,65 @@ static gboolean is_ident_char(char ch)
     return g_ascii_isalnum(ch) || ch == '-' || ch == '_';
 }
 
+typedef LxpColor (*MapColor)(const LxpColor *color, gconstpointer data);
+
+typedef struct {
+    const LxpRecolorPalette *from, *to;
+} PaletteMap;
+
+static LxpColor map_palette(const LxpColor *c, gconstpointer data)
+{
+    const PaletteMap *pm = data;
+    return lxp_recolor_color(c, pm->from, pm->to);
+}
+
+typedef struct {
+    double from_h, from_s, from_l;
+    double to_h, to_s, to_l;
+    double range;
+} HueMap;
+
+/* Colors near the source hue take the target hue; shading is kept. */
+static LxpColor map_hue(const LxpColor *c, gconstpointer data)
+{
+    const HueMap *hm = data;
+    double h, s, l, d;
+    LxpColor out;
+
+    lxp_color_to_hsl(c, &h, &s, &l);
+    d = fabs(h - hm->from_h);
+    if (d > 180)
+        d = 360 - d;
+    if (s < NEUTRAL_SATURATION || d > hm->range)
+        return *c;
+    out = lxp_color_from_hsl(hm->to_h + (h - hm->from_h),
+                             hm->from_s > 0 ? s * hm->to_s / hm->from_s : hm->to_s,
+                             l + (hm->to_l - hm->from_l) * 0.7, 1);
+    out.a = c->a;
+    return out;
+}
+
+static char *recolor_text(const char *css, MapColor map, gconstpointer data);
+
 char *lxp_recolor_css(const char *css, const LxpRecolorPalette *from,
                       const LxpRecolorPalette *to)
+{
+    PaletteMap pm = { from, to };
+    return recolor_text(css, map_palette, &pm);
+}
+
+char *lxp_recolor_hue(const char *text, const LxpColor *from, const LxpColor *to,
+                      double range)
+{
+    HueMap hm;
+
+    lxp_color_to_hsl(from, &hm.from_h, &hm.from_s, &hm.from_l);
+    lxp_color_to_hsl(to, &hm.to_h, &hm.to_s, &hm.to_l);
+    hm.range = range;
+    return recolor_text(text, map_hue, &hm);
+}
+
+static char *recolor_text(const char *css, MapColor map, gconstpointer data)
 {
     GString *out = g_string_sized_new(strlen(css));
     const char *p = css;
@@ -204,7 +261,7 @@ char *lxp_recolor_css(const char *css, const LxpRecolorPalette *from,
             g_string_append_c(out, *p++);
             continue;
         }
-        mapped = lxp_recolor_color(&c, from, to);
+        mapped = map(&c, data);
         append_color(out, &mapped, function);
         p += len;
     }

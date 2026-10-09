@@ -20,6 +20,7 @@ typedef struct {
 } IconTheme;
 
 static GHashTable *themes;   /* name -> IconTheme* (NULL if missing) */
+static GPtrArray *extra_dirs;  /* searched first */
 static GHashTable *results;  /* "theme\nsize\nnames" -> path ("" if none) */
 
 static void icon_dir_clear(IconDir *d)
@@ -42,6 +43,8 @@ static GPtrArray *search_bases(const char *name)
     GPtrArray *bases = g_ptr_array_new_with_free_func(g_free);
     char *path;
 
+    for (guint i = 0; extra_dirs && i < extra_dirs->len; i++)
+        g_ptr_array_add(bases, g_build_filename(extra_dirs->pdata[i], name, NULL));
     path = g_build_filename(g_get_home_dir(), ".icons", name, NULL);
     g_ptr_array_add(bases, path);
     g_ptr_array_add(bases, g_build_filename(g_get_user_data_dir(), "icons", name, NULL));
@@ -277,4 +280,20 @@ GPtrArray *lxp_icon_themes_list(void)
     }
     g_ptr_array_sort_values(names, (GCompareFunc)g_ascii_strcasecmp);
     return names;
+}
+
+void lxp_icons_add_search_dir(const char *dir)
+{
+    if (!extra_dirs)
+        extra_dirs = g_ptr_array_new_with_free_func(g_free);
+    if (g_ptr_array_find_with_equal_func(extra_dirs, dir, g_str_equal, NULL))
+        return;
+    g_ptr_array_insert(extra_dirs, 0, g_strdup(dir));
+    lxp_icons_reset();
+}
+
+void lxp_icons_reset(void)
+{
+    g_clear_pointer(&themes, g_hash_table_unref);
+    g_clear_pointer(&results, g_hash_table_unref);
 }

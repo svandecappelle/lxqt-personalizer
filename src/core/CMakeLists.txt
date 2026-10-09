@@ -23,7 +23,9 @@ add_library(lxp STATIC
     lxp-paths.c
     lxp-fileutil.c
     lxp-ini.c
+    lxp-iconcolor.c
     lxp-kvantum-gen.c
+    lxp-terminal-gen.c
     lxp-libconfig.c
     lxp-system.c
     lxp-theme.c
@@ -41,7 +43,8 @@ add_library(lxp STATIC
     backends/wallpaper.c
     backends/panel.c
     backends/compositor.c
-    backends/kvantum.c)
+    backends/kvantum.c
+    backends/terminal.c)
 
 target_include_directories(lxp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

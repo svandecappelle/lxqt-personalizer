@@ -15,6 +15,7 @@ covering:
 | `panel`     | position, size, colors, opacity            | `~/.config/lxqt/panel.conf`                                   |
 | `compositor`| rounded corners, shadows, fading (picom)   | `~/.config/picom.conf`                                        |
 | `kvantum`   | Kvantum theme (with the kvantum style)     | `~/.config/Kvantum/kvantum.kvconfig`                          |
+| `terminal`  | QTerminal color scheme                     | `~/.config/qterminal.org/qterminal.ini`                       |
 
 Files are edited in place: only themed keys change, everything else
 (comments, layout, unrelated settings) is kept byte for byte.
@@ -62,8 +63,8 @@ wallpaper is copied into the theme folder.
 
 | Theme | Look |
 |---|---|
-| **Mac-like** | Light, frosted top bar with flat task buttons, colored window buttons on the left, centered titles, no borders, 12 px window corners with deep soft shadows, rounded 6 px widgets, smooth animations, soft color-field wallpaper. |
-| **Win11-like** | Light, frosted 46 px taskbar with underlined active buttons, minimal window buttons with a red close on hover, left titles, 8 px window corners, 4 px widgets, subtle animations, wave wallpaper. |
+| **Mac-like** | Light (with a dark version), frosted top bar with flat task buttons, colored window buttons on the left, centered titles, no borders, 12 px window corners with deep soft shadows, rounded 6 px widgets, smooth animations, soft color-field wallpaper. |
+| **Win11-like** | Light (with a dark version), frosted 46 px taskbar with underlined active buttons, minimal window buttons with a red close on hover, left titles, 8 px window corners, 4 px widgets, subtle animations, wave wallpaper. |
 
 Built-ins are installed read-only in `/usr/share/lxqt-personalizer/themes`
 and generated into `~/.cache/lxqt-personalizer` on first use. **Duplicate &
@@ -93,6 +94,16 @@ so the Win11-like taskbar keeps them on the left.
 - **GTK corners** — the same radius on GTK buttons, fields and popovers.
 - **Panel styles** — task buttons as an underline, pills or flat
   (`panel_style=`), with the generated LXQt theme.
+- **Terminal colors** — a matching QTerminal color scheme for every
+  generated theme (`terminal` backend; new terminal windows use it).
+- **Light and dark in one theme** — `variant=true` also generates the
+  opposite version (*Also make a dark/light version* in the editor); the
+  app shows a Light/Dark switch, and `lxp apply|preview --variant` uses it.
+- **Accent folders** — `folder_color=true` recolors the folder icons of an
+  SVG icon theme (Breeze, Papirus…) to the accent, as a small generated icon
+  theme that inherits the original.
+- **Surprise me** — a random, harmonious design in one click, or
+  `lxp new --surprise [NAME]`.
 
 ## Sharing themes
 
