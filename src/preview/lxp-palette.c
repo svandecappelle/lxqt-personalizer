@@ -79,6 +79,7 @@ static gboolean cluster_image(const char *path, Cluster *clusters)
 static void reset_optional(LxpScheme *s)
 {
     s->has_accent_text = s->has_title = s->has_panel = s->has_link = FALSE;
+    s->has_menu = s->has_menu_highlight = FALSE;
 }
 
 gboolean lxp_palette_from_image(const char *path, gboolean dark, LxpScheme *s)

@@ -49,6 +49,8 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
     s->has_title = get_color(theme, "title", &s->title, FALSE, NULL);
     s->has_panel = get_color(theme, "panel", &s->panel, FALSE, NULL);
     s->has_link = get_color(theme, "link", &s->link, FALSE, NULL);
+    s->has_menu = get_color(theme, "menu", &s->menu, FALSE, NULL);
+    s->has_menu_highlight = get_color(theme, "menu_highlight", &s->menu_highlight, FALSE, NULL);
     for (int i = 0; i < LXP_ANSI_COLORS; i++) {
         g_autofree char *key = g_strdup_printf("ansi%d", i);
         s->has_ansi[i] = get_color(theme, key, &s->ansi[i], FALSE, NULL);
@@ -111,6 +113,8 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
     set_color(theme, "title", &s->title, s->has_title);
     set_color(theme, "panel", &s->panel, s->has_panel);
     set_color(theme, "link", &s->link, s->has_link);
+    set_color(theme, "menu", &s->menu, s->has_menu);
+    set_color(theme, "menu_highlight", &s->menu_highlight, s->has_menu_highlight);
     for (int i = 0; i < LXP_ANSI_COLORS; i++) {
         g_autofree char *key = g_strdup_printf("ansi%d", i);
         set_color(theme, key, &s->ansi[i], s->has_ansi[i]);
@@ -281,6 +285,16 @@ void lxp_scheme_derive(const LxpScheme *s, LxpSchemeColors *c)
     c->panel_fg = readable_on(&c->panel, &c->fg);
     c->panel_hover = lxp_color_mix(&c->panel, &c->panel_fg, 0.14);
 
+    /* Openbox menu: the window colors unless picked */
+    c->menu_bg = s->has_menu ? s->menu : c->bg;
+    c->menu_fg = s->has_menu ? readable_on(&c->menu_bg, &c->fg) : c->fg;
+    c->menu_fg_dim = lxp_color_mix(&c->menu_fg, &c->menu_bg, 0.45);
+    c->menu_title = lxp_color_mix(&c->menu_bg, &c->menu_fg, 0.07);
+    c->menu_border = lxp_color_mix(&c->menu_bg, &c->menu_fg, 0.20);
+    c->menu_active = s->has_menu_highlight ? s->menu_highlight : c->accent;
+    c->menu_active_fg = s->has_menu_highlight ? readable_on(&c->menu_active, &c->accent_fg)
+                                              : c->accent_fg;
+
     lxp_terminal_palette(c, c->ansi);
     for (int i = 0; i < LXP_ANSI_COLORS; i++)
         if (s->has_ansi[i])
@@ -317,6 +331,13 @@ static GHashTable *template_vars(const char *name, const LxpSchemeColors *c)
     add_color(vars, "panel", &c->panel);
     add_color(vars, "panel_fg", &c->panel_fg);
     add_color(vars, "panel_hover", &c->panel_hover);
+    add_color(vars, "menu_bg", &c->menu_bg);
+    add_color(vars, "menu_fg", &c->menu_fg);
+    add_color(vars, "menu_fg_dim", &c->menu_fg_dim);
+    add_color(vars, "menu_title", &c->menu_title);
+    add_color(vars, "menu_border", &c->menu_border);
+    add_color(vars, "menu_active", &c->menu_active);
+    add_color(vars, "menu_active_fg", &c->menu_active_fg);
     return vars;
 }
 

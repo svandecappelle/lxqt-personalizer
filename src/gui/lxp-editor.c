@@ -124,6 +124,7 @@ typedef struct {
     OptionalFont title_font, gtk_font;
     GtkWidget *keep_border, *animate_iconify;
     GtkWidget *title_style, *title_padding, *border_width, *title_align, *buttons;
+    OptionalColor menu_bg, menu_highlight;
     GtkWidget *dark_mode;
     GtkWidget *tool_buttons;
     GtkWidget *widget_radius;
@@ -351,6 +352,8 @@ static void read_form(Editor *ed, LxpScheme *s)
     s->has_title = get_optional(&ed->title, &s->title);
     s->has_panel = get_optional(&ed->panel_color, &s->panel);
     s->has_link = get_optional(&ed->link, &s->link);
+    s->has_menu = get_optional(&ed->menu_bg, &s->menu);
+    s->has_menu_highlight = get_optional(&ed->menu_highlight, &s->menu_highlight);
     for (int i = 0; i < LXP_ANSI_COLORS; i++)
         if ((s->has_ansi[i] = ed->ansi_set[i]))
             s->ansi[i] = from_button(ed->ansi[i]);
@@ -511,6 +514,8 @@ static void show_automatic_colors(Editor *ed)
         { &ed->title, &c.title_active },
         { &ed->panel_color, &c.panel },
         { &ed->link, &c.link },
+        { &ed->menu_bg, &c.menu_bg },
+        { &ed->menu_highlight, &c.menu_active },
     };
     gboolean was_loading = ed->loading;
 
@@ -545,6 +550,10 @@ static void sync_sensitivity(Editor *ed)
 
         for (gsize i = 0; i < G_N_ELEMENTS(window_style); i++)
             gtk_widget_set_sensitive(window_style[i], generated);
+        gtk_widget_set_sensitive(ed->menu_bg.automatic, generated);
+        gtk_widget_set_sensitive(ed->menu_bg.button, generated);
+        gtk_widget_set_sensitive(ed->menu_highlight.automatic, generated);
+        gtk_widget_set_sensitive(ed->menu_highlight.button, generated);
         gtk_widget_set_sensitive(ed->wallpaper_choose, image);
         gtk_widget_set_sensitive(ed->wallpaper_mode, image);
         gtk_widget_set_visible(ed->wallpaper_shuffle, !image);
@@ -586,6 +595,8 @@ static void update_warning(Editor *ed)
         g_string_append(text, "Text on the accent color is hard to read. ");
     if (lxp_color_contrast(&c.title_active_fg, &c.title_active) < 3)
         g_string_append(text, "Title bar text is hard to read. ");
+    if (lxp_color_contrast(&c.menu_active_fg, &c.menu_active) < 3)
+        g_string_append(text, "Text on the menu highlight is hard to read. ");
     if (*layout && !valid_title_layout(layout))
         g_string_append(text, "Title buttons: use the letters N D S L I M C, each once. ");
     if (style && g_ascii_strcasecmp(style, "Fusion") != 0 &&
@@ -709,6 +720,8 @@ static void apply_preset(GtkButton *button, gpointer data)
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->accent_text.automatic), TRUE);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->title.automatic), TRUE);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->panel_color.automatic), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->menu_bg.automatic), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->menu_highlight.automatic), TRUE);
     ed->loading = FALSE;
     schedule_preview(ed);
 }
@@ -724,6 +737,8 @@ static void show_scheme_colors(Editor *ed, const LxpScheme *s)
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->accent_text.automatic), TRUE);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->title.automatic), TRUE);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->panel_color.automatic), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->menu_bg.automatic), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->menu_highlight.automatic), TRUE);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(ed->link.automatic), TRUE);
     ed->loading = FALSE;
     schedule_preview(ed);
@@ -1164,6 +1179,11 @@ static void build_appearance_page(Editor *ed, GtkWidget *box)
     attach_row(windows, 8, "Title alignment", ed->title_align, NULL);
     ed->border_width = spin(ed, 0, 4, 1, NULL);
     attach_row(windows, 9, "Border", ed->border_width, NULL);
+    optional_row(ed, windows, 10, "Menu background", &ed->menu_bg);
+    gtk_widget_set_tooltip_text(ed->menu_bg.button, "Openbox menus (generated window theme)");
+    optional_row(ed, windows, 11, "Menu highlight", &ed->menu_highlight);
+    gtk_widget_set_tooltip_text(ed->menu_highlight.button, "Selected item of Openbox menus "
+                                                           "(generated window theme)");
     gtk_box_append(GTK_BOX(box), windows);
 
     gtk_box_append(GTK_BOX(box), section("Applications"));
@@ -1401,6 +1421,8 @@ static void load_form(Editor *ed)
     set_optional(&ed->title, s.has_title, &s.title, &c.title_active);
     set_optional(&ed->panel_color, s.has_panel, &s.panel, &c.panel);
     set_optional(&ed->link, s.has_link, &s.link, &c.link);
+    set_optional(&ed->menu_bg, s.has_menu, &s.menu, &c.menu_bg);
+    set_optional(&ed->menu_highlight, s.has_menu_highlight, &s.menu_highlight, &c.menu_active);
     for (int i = 0; i < LXP_ANSI_COLORS; i++) {
         ed->ansi_set[i] = s.has_ansi[i];
         set_button(ed->ansi[i], &c.ansi[i]);

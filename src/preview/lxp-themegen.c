@@ -79,7 +79,8 @@ static gboolean generate_variant(LxpTheme *theme, const char *dir, int width, in
         g_autofree char *surface = lxp_color_to_hex(&flipped.surface);
         g_autofree char *fg = lxp_color_to_hex(&flipped.foreground);
         g_autofree char *accent = lxp_color_to_hex(&flipped.accent);
-        static const char *const optional[] = { "accent_text", "title", "panel", "link" };
+        static const char *const optional[] = { "accent_text", "title", "panel", "link",
+                                                "menu", "menu_highlight" };
 
         lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "background", bg);
         lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "surface", surface);

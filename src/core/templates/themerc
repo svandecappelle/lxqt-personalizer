@@ -45,23 +45,23 @@ window.inactive.grip.bg.color: {{title_inactive}}
 window.*.client.color: {{bg}}
 
 menu.border.width: 1
-menu.border.color: {{border}}
-menu.separator.color: {{border}}
+menu.border.color: {{menu_border}}
+menu.separator.color: {{menu_border}}
 menu.separator.width: 1
 menu.separator.padding.width: 6
 menu.separator.padding.height: 3
 menu.title.bg: Flat Solid
-menu.title.bg.color: {{bg_alt}}
-menu.title.text.color: {{fg}}
+menu.title.bg.color: {{menu_title}}
+menu.title.text.color: {{menu_fg}}
 menu.title.text.justify: center
 menu.items.bg: Flat Solid
-menu.items.bg.color: {{bg}}
-menu.items.text.color: {{fg}}
-menu.items.disabled.text.color: {{fg_dim}}
+menu.items.bg.color: {{menu_bg}}
+menu.items.text.color: {{menu_fg}}
+menu.items.disabled.text.color: {{menu_fg_dim}}
 menu.items.active.bg: Flat Solid
-menu.items.active.bg.color: {{accent}}
-menu.items.active.text.color: {{accent_fg}}
-menu.items.active.disabled.text.color: {{fg_dim}}
+menu.items.active.bg.color: {{menu_active}}
+menu.items.active.text.color: {{menu_active_fg}}
+menu.items.active.disabled.text.color: {{menu_fg_dim}}
 
 osd.border.width: 1
 osd.border.color: {{border}}

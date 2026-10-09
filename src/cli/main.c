@@ -215,6 +215,7 @@ static int cmd_new(int argc, char **argv)
 {
     g_autofree char *bg = NULL, *surface = NULL, *fg = NULL, *accent = NULL;
     g_autofree char *accent_text = NULL, *title = NULL, *panel = NULL;
+    g_autofree char *menu = NULL, *menu_highlight = NULL;
     g_autofree char *font = NULL, *icons = NULL, *wallpaper = NULL, *mode = NULL;
     g_autofree char *wallpaper_style = NULL;
     int seed = 0;
@@ -232,6 +233,9 @@ static int cmd_new(int argc, char **argv)
         { "accent-text", 0, 0, G_OPTION_ARG_STRING, &accent_text, "Text on accent", "COLOR" },
         { "title", 0, 0, G_OPTION_ARG_STRING, &title, "Active title bar", "COLOR" },
         { "panel", 0, 0, G_OPTION_ARG_STRING, &panel, "Panel background", "COLOR" },
+        { "menu", 0, 0, G_OPTION_ARG_STRING, &menu, "Openbox menu background", "COLOR" },
+        { "menu-highlight", 0, 0, G_OPTION_ARG_STRING, &menu_highlight,
+          "Openbox menu selected item", "COLOR" },
         { "font", 0, 0, G_OPTION_ARG_STRING, &font, "Font, e.g. “Noto Sans 10”", "FONT" },
         { "icons", 0, 0, G_OPTION_ARG_STRING, &icons, "Icon theme", "NAME" },
         { "wallpaper", 0, 0, G_OPTION_ARG_FILENAME, &wallpaper,
@@ -306,7 +310,10 @@ static int cmd_new(int argc, char **argv)
         !parse_color_option("accent-text", accent_text, &scheme.accent_text,
                             &scheme.has_accent_text) ||
         !parse_color_option("title", title, &scheme.title, &scheme.has_title) ||
-        !parse_color_option("panel", panel, &scheme.panel, &scheme.has_panel))
+        !parse_color_option("panel", panel, &scheme.panel, &scheme.has_panel) ||
+        !parse_color_option("menu", menu, &scheme.menu, &scheme.has_menu) ||
+        !parse_color_option("menu-highlight", menu_highlight, &scheme.menu_highlight,
+                            &scheme.has_menu_highlight))
         return 2;
     scheme.font = g_strdup(font);
     if (wallpaper_style) {

@@ -16,6 +16,8 @@
  *   accent_text=#2e3440    optional, text on accent (else best contrast)
  *   title=#5e81ac          optional, active title bar (else neutral)
  *   panel=#242933          optional, panel background (else derived)
+ *   menu=#3b4252           optional, Openbox menu background (else background)
+ *   menu_highlight=#81a1c1 optional, Openbox menu selected item (else accent)
  *   font=Noto Sans 10      optional
  *   title_font=Noto Sans Bold 10   optional window title font (else font, bold)
  *   gtk_font=Cantarell 11  optional font of GTK applications (else font)
@@ -53,8 +55,8 @@
 
 typedef struct {
     LxpColor background, surface, foreground, accent;
-    LxpColor accent_text, title, panel, link;
-    gboolean has_accent_text, has_title, has_panel, has_link;
+    LxpColor accent_text, title, panel, link, menu, menu_highlight;
+    gboolean has_accent_text, has_title, has_panel, has_link, has_menu, has_menu_highlight;
     char    *font;
     char    *title_font;
     char    *gtk_font;
@@ -87,6 +89,8 @@ typedef struct {
     LxpColor title_active, title_active_fg, title_active_hover;
     LxpColor title_inactive, title_inactive_fg;
     LxpColor panel, panel_fg, panel_hover;
+    LxpColor menu_bg, menu_fg, menu_fg_dim, menu_title, menu_border;
+    LxpColor menu_active, menu_active_fg;
     LxpColor ansi[LXP_ANSI_COLORS];  /* terminal colors, 8-15 the bright ones */
 } LxpSchemeColors;
 

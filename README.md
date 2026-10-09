@@ -144,7 +144,8 @@ missing. **New Theme** (Ctrl+N) and **Edit Colors…** open the editor, with a
 live preview:
 
 - **Colors** — name, author, description, presets, the scheme colors
-  (optional text-on-accent, title bar, panel and link colors), contrast
+  (optional text-on-accent, title bar, panel and link colors; Openbox menu
+  background and highlight under Appearance → Windows), contrast
   warnings;
 - **Appearance** — window (Openbox) theme, title buttons, title font,
   border when maximized, minimize animation; GTK and LXQt themes, Qt widget

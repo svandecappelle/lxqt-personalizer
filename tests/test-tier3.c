@@ -114,6 +114,39 @@ static void test_terminal_overrides(void)
     }
 }
 
+static void test_menu_colors(void)
+{
+    g_autoptr(LxpTheme) theme = scheme_theme("Menu");
+    g_autofree char *dir = g_build_filename(g_get_user_data_dir(), "menu", NULL);
+    g_autoptr(GError) error = NULL;
+    g_autofree char *rc = NULL;
+    LxpScheme s;
+    LxpSchemeColors c;
+
+    /* automatic: the window colors */
+    g_assert_true(lxp_scheme_load(theme, &s, &error));
+    lxp_scheme_derive(&s, &c);
+    g_assert_cmpmem(&c.menu_bg, sizeof(LxpColor), &c.bg, sizeof(LxpColor));
+    g_assert_cmpmem(&c.menu_active, sizeof(LxpColor), &c.accent, sizeof(LxpColor));
+    lxp_scheme_clear(&s);
+
+    /* picked: a dark menu on a light theme gets light text */
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "menu", "#202020");
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "menu_highlight", "#ffcc00");
+    g_assert_true(lxp_scheme_load(theme, &s, &error));
+    lxp_scheme_derive(&s, &c);
+    g_assert_cmpfloat(lxp_color_contrast(&c.menu_fg, &c.menu_bg), >=, 4.5);
+    g_assert_cmpfloat(lxp_color_contrast(&c.menu_active_fg, &c.menu_active), >=, 4.5);
+    lxp_scheme_clear(&s);
+
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    g_assert_no_error(error);
+    rc = read_file(dir, "data/themes/lxp-menu/openbox-3/themerc");
+    g_assert_nonnull(strstr(rc, "menu.items.bg.color: #202020\n"));
+    g_assert_nonnull(strstr(rc, "menu.items.active.bg.color: #ffcc00\n"));
+    g_assert_nonnull(strstr(rc, "window.*.client.color: #ececec\n"));
+}
+
 static void test_variant(void)
 {
     g_autoptr(LxpTheme) theme = scheme_theme("Duo");
@@ -220,6 +253,7 @@ int main(int argc, char **argv)
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
     g_test_add_func("/tier3/terminal", test_terminal);
     g_test_add_func("/tier3/terminal-overrides", test_terminal_overrides);
+    g_test_add_func("/tier3/menu-colors", test_menu_colors);
     g_test_add_func("/tier3/variant", test_variant);
     g_test_add_func("/tier3/folder-overlay", test_folder_overlay);
     g_test_add_func("/tier3/surprise", test_surprise);
