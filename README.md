@@ -96,6 +96,10 @@ so the Win11-like taskbar keeps them on the left.
   (`panel_style=`), with the generated LXQt theme.
 - **Terminal colors** — a matching QTerminal color scheme for every
   generated theme (`terminal` backend; new terminal windows use it).
+  Any of the 16 ANSI colors can be picked in the editor's *Terminal*
+  section (`ansi0=`…`ansi15=`, 8-15 the bright ones); the rest are derived.
+  *Keep current colors* leaves `terminal` out of `generate=`: the theme
+  then keeps the installed scheme it names, or leaves the terminal alone.
 - **Light and dark in one theme** — `variant=true` also generates the
   opposite version (*Also make a dark/light version* in the editor); the
   app shows a Light/Dark switch, and `lxp apply|preview --variant` uses it.

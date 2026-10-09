@@ -38,6 +38,10 @@
  *                          generated Kvantum theme (with style=kvantum)
  *   style=kvantum          optional Qt widget style (default Fusion, which
  *                          follows the palette everywhere)
+ *   ansi0=#3b4252 ... ansi15=#eceff4
+ *                          optional terminal colors: 0-7 black, red,
+ *                          green, yellow, blue, magenta, cyan, white;
+ *                          8-15 their bright versions (else derived)
  *   generate=openbox;gtk;lxqt;kvantum;terminal
  *                          optional: which themes are generated from the
  *                          colors (default all); for the others the
@@ -45,6 +49,7 @@
  */
 
 #define LXP_SCHEME_GROUP "Scheme"
+#define LXP_ANSI_COLORS  16
 
 typedef struct {
     LxpColor background, surface, foreground, accent;
@@ -70,6 +75,8 @@ typedef struct {
     char    *panel_style;        /* NULL: underline */
     gboolean folder_color;
     char    *icons_base;         /* icon theme the folder overlay inherits */
+    LxpColor ansi[LXP_ANSI_COLORS];
+    gboolean has_ansi[LXP_ANSI_COLORS];
 } LxpScheme;
 
 /* Every color the generated files use, derived from a scheme. */
@@ -80,6 +87,7 @@ typedef struct {
     LxpColor title_active, title_active_fg, title_active_hover;
     LxpColor title_inactive, title_inactive_fg;
     LxpColor panel, panel_fg, panel_hover;
+    LxpColor ansi[LXP_ANSI_COLORS];  /* terminal colors, 8-15 the bright ones */
 } LxpSchemeColors;
 
 gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *scheme, GError **error);

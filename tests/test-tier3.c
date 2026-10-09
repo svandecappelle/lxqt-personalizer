@@ -58,6 +58,62 @@ static void test_terminal(void)
     g_assert_error(error, LXP_ERROR, LXP_ERROR_INVALID);
 }
 
+static void test_terminal_overrides(void)
+{
+    g_autoptr(LxpTheme) theme = scheme_theme("Ansi");
+    g_autoptr(LxpTheme) saved = lxp_theme_new("Saved");
+    g_autofree char *dir = g_build_filename(g_get_user_data_dir(), "ansi", NULL);
+    g_autoptr(GError) error = NULL;
+    g_autofree char *scheme = NULL, *red = NULL, *green = NULL;
+    LxpScheme s;
+    LxpSchemeColors c;
+    LxpColor derived[LXP_ANSI_COLORS];
+
+    /* red picked, bright green picked, the rest derived */
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "ansi1", "#ff0000");
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "ansi10", "#00ff00");
+    g_assert_true(lxp_scheme_load(theme, &s, &error));
+    g_assert_true(s.has_ansi[1] && s.has_ansi[10] && !s.has_ansi[2]);
+    lxp_scheme_derive(&s, &c);
+    lxp_terminal_palette(&c, derived);
+    g_assert_cmpfloat(c.ansi[2].g, ==, derived[2].g);
+    lxp_scheme_save(&s, saved);
+    red = lxp_theme_get_string(saved, LXP_SCHEME_GROUP, "ansi1");
+    green = lxp_theme_get_string(saved, LXP_SCHEME_GROUP, "ansi10");
+    g_assert_cmpstr(red, ==, "#ff0000");
+    g_assert_cmpstr(green, ==, "#00ff00");
+    {
+        g_autofree char *none = lxp_theme_get_string(saved, LXP_SCHEME_GROUP, "ansi2");
+        g_assert_null(none);
+    }
+    lxp_scheme_clear(&s);
+
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    g_assert_no_error(error);
+    scheme = read_file(dir, "data/qtermwidget6/color-schemes/lxp-ansi.colorscheme");
+    g_assert_nonnull(strstr(scheme, "[Color1]\nBold=false\nColor=255,0,0\n"));
+    g_assert_nonnull(strstr(scheme, "[Color2Intense]\nBold=false\nColor=0,255,0\n"));
+    g_assert_null(strstr(scheme, "[Color2]\nBold=false\nColor=0,255,0\n"));
+
+    /* kept: no scheme file, and the stale generated name is dropped... */
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "generate", "openbox;gtk;lxqt;kvantum");
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    {
+        g_autofree char *file = g_build_filename(dir, "data/qtermwidget6/color-schemes/"
+                                                 "lxp-ansi.colorscheme", NULL);
+        g_autofree char *name = lxp_theme_get_string(theme, "Terminal", "color_scheme");
+        g_assert_false(g_file_test(file, G_FILE_TEST_EXISTS));
+        g_assert_null(name);
+    }
+    /* ...while an installed one stays */
+    lxp_theme_set_string(theme, "Terminal", "color_scheme", "Linux");
+    g_assert_true(lxp_scheme_generate(theme, dir, &error));
+    {
+        g_autofree char *name = lxp_theme_get_string(theme, "Terminal", "color_scheme");
+        g_assert_cmpstr(name, ==, "Linux");
+    }
+}
+
 static void test_variant(void)
 {
     g_autoptr(LxpTheme) theme = scheme_theme("Duo");
@@ -70,6 +126,7 @@ static void test_variant(void)
     g_autofree char *openbox = NULL;
 
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "variant", "true");
+    lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "ansi1", "#ff0000");
     g_assert_true(lxp_theme_generate(theme, dir, 64, 36, &error));
     g_assert_true(lxp_theme_save(theme, dir, &error));
     g_assert_no_error(error);
@@ -84,6 +141,7 @@ static void test_variant(void)
 
     /* flipped into comfortable ranges: no black backgrounds, readable text */
     g_assert_true(lxp_scheme_load(variant, &s, &error));
+    g_assert_false(s.has_ansi[1]);  /* picked for the light background */
     lxp_scheme_derive(&s, &c);
     g_assert_true(c.dark);
     g_assert_cmpfloat(lxp_color_luminance(&c.bg), >, 0.005);
@@ -161,6 +219,7 @@ int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
     g_test_add_func("/tier3/terminal", test_terminal);
+    g_test_add_func("/tier3/terminal-overrides", test_terminal_overrides);
     g_test_add_func("/tier3/variant", test_variant);
     g_test_add_func("/tier3/folder-overlay", test_folder_overlay);
     g_test_add_func("/tier3/surprise", test_surprise);

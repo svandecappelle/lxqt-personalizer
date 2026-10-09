@@ -54,6 +54,10 @@ static const char *const tool_button_values[] = {
 /* lxqt-panel "alignment": -1, 0, 1 */
 static const char *const panel_alignments[] = { "Start", "Center", "End", NULL };
 
+static const char *const ansi_names[] = {
+    "Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White",
+};
+
 static const struct {
     const char *name;
     const char *bg, *surface, *fg, *accent;
@@ -107,6 +111,12 @@ typedef struct {
     GtkWidget *variant, *variant_label;
     OptionalColor accent_text, title, panel_color, link;
     GtkWidget *warning;
+
+    /* Terminal: 0-7 normal, 8-15 bright; derived until picked */
+    GtkWidget *keep_terminal;
+    GtkWidget *ansi[LXP_ANSI_COLORS];
+    gboolean ansi_set[LXP_ANSI_COLORS];
+    GtkWidget *ansi_reset[LXP_ANSI_COLORS / 2];
 
     /* Appearance */
     Choice openbox, gtk, lxqt, style, kvantum, icons, cursor, gtk_icons;
@@ -341,6 +351,9 @@ static void read_form(Editor *ed, LxpScheme *s)
     s->has_title = get_optional(&ed->title, &s->title);
     s->has_panel = get_optional(&ed->panel_color, &s->panel);
     s->has_link = get_optional(&ed->link, &s->link);
+    for (int i = 0; i < LXP_ANSI_COLORS; i++)
+        if ((s->has_ansi[i] = ed->ansi_set[i]))
+            s->ansi[i] = from_button(ed->ansi[i]);
     s->font = font ? pango_font_description_to_string(font) : NULL;
     s->title_font = get_optional_font(&ed->title_font);
     s->gtk_font = get_optional_font(&ed->gtk_font);
@@ -370,6 +383,7 @@ static void read_form(Editor *ed, LxpScheme *s)
     s->keep_gtk = choice_get(&ed->gtk) != NULL;
     s->keep_lxqt = choice_get(&ed->lxqt) != NULL;
     s->keep_kvantum = choice_get(&ed->kvantum) != NULL;
+    s->keep_terminal = gtk_switch_get_active(GTK_SWITCH(ed->keep_terminal));
     s->folder_color = gtk_switch_get_active(GTK_SWITCH(ed->folder_color));
     s->icons_base = g_strdup(choice_get(&ed->icons));
     s->widget_radius = spin_value(ed->widget_radius);
@@ -506,6 +520,9 @@ static void show_automatic_colors(Editor *ed)
     for (gsize i = 0; i < G_N_ELEMENTS(rows); i++)
         if (gtk_check_button_get_active(GTK_CHECK_BUTTON(rows[i].o->automatic)))
             set_button(rows[i].o->button, rows[i].value);
+    for (int i = 0; i < LXP_ANSI_COLORS; i++)
+        if (!ed->ansi_set[i])
+            set_button(ed->ansi[i], &c.ansi[i]);
     ed->loading = was_loading;
     lxp_scheme_clear(&s);
 }
@@ -538,6 +555,15 @@ static void sync_sensitivity(Editor *ed)
         !gtk_check_button_get_active(GTK_CHECK_BUTTON(ed->title_font.automatic)));
     gtk_widget_set_sensitive(ed->gtk_font.button,
         !gtk_check_button_get_active(GTK_CHECK_BUTTON(ed->gtk_font.automatic)));
+    {
+        gboolean generated = !gtk_switch_get_active(GTK_SWITCH(ed->keep_terminal));
+
+        for (int i = 0; i < LXP_ANSI_COLORS; i++)
+            gtk_widget_set_sensitive(ed->ansi[i], generated);
+        for (int i = 0; i < LXP_ANSI_COLORS / 2; i++)
+            gtk_widget_set_sensitive(ed->ansi_reset[i], generated &&
+                (ed->ansi_set[i] || ed->ansi_set[i + LXP_ANSI_COLORS / 2]));
+    }
 }
 
 static void update_warning(Editor *ed)
@@ -639,6 +665,27 @@ static void on_optional_color(GObject *object, GParamSpec *pspec, gpointer data)
     ed->loading = TRUE;
     gtk_check_button_set_active(GTK_CHECK_BUTTON(o->automatic), FALSE);
     ed->loading = FALSE;
+    schedule_preview(ed);
+}
+
+/* Picking a terminal color overrides the derived one. */
+static void on_ansi_color(GObject *object, GParamSpec *pspec, gpointer data)
+{
+    Editor *ed = data;
+
+    if (ed->loading)
+        return;
+    ed->ansi_set[GPOINTER_TO_INT(g_object_get_data(object, "lxp-ansi"))] = TRUE;
+    schedule_preview(ed);
+}
+
+/* Back to the derived normal and bright color of one row. */
+static void on_ansi_reset(GtkButton *button, gpointer data)
+{
+    Editor *ed = data;
+    int row = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "lxp-ansi"));
+
+    ed->ansi_set[row] = ed->ansi_set[row + LXP_ANSI_COLORS / 2] = FALSE;
     schedule_preview(ed);
 }
 
@@ -937,6 +984,60 @@ static GtkWidget *page(GtkWidget *notebook, const char *title)
     return box;
 }
 
+/* QTerminal's ANSI colors: derived from the scheme, each one can be picked. */
+static void build_terminal_section(Editor *ed, GtkWidget *box)
+{
+    GtkWidget *keep = new_grid();
+    GtkWidget *grid = new_grid();
+    GtkWidget *note = gtk_label_new("For QTerminal; new terminal windows use them. "
+                                    "Colors you pick replace the ones made from the "
+                                    "theme colors.");
+    const char *headers[] = { "Normal", "Bright" };
+
+    gtk_box_append(GTK_BOX(box), section("Terminal"));
+    gtk_label_set_wrap(GTK_LABEL(note), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(note), 0);
+    gtk_widget_add_css_class(note, "dim-label");
+    gtk_box_append(GTK_BOX(box), note);
+
+    ed->keep_terminal = toggle(ed, "Do not make terminal colors from this theme; "
+                                   "the terminal keeps its color scheme");
+    attach_row(keep, 0, "Keep current colors", ed->keep_terminal, NULL);
+    gtk_box_append(GTK_BOX(box), keep);
+
+    for (int col = 0; col < 2; col++) {
+        GtkWidget *label = gtk_label_new(headers[col]);
+        gtk_widget_add_css_class(label, "dim-label");
+        gtk_grid_attach(GTK_GRID(grid), label, 1 + col, 0, 1, 1);
+    }
+    for (int row = 0; row < LXP_ANSI_COLORS / 2; row++) {
+        GtkWidget *label = gtk_label_new(ansi_names[row]);
+        GtkWidget *reset = gtk_button_new_from_icon_name("edit-undo-symbolic");
+
+        gtk_label_set_xalign(GTK_LABEL(label), 0);
+        gtk_widget_set_hexpand(label, TRUE);
+        gtk_grid_attach(GTK_GRID(grid), label, 0, row + 1, 1, 1);
+        for (int col = 0; col < 2; col++) {
+            int i = row + col * LXP_ANSI_COLORS / 2;
+            GtkWidget *button = gtk_color_dialog_button_new(gtk_color_dialog_new());
+
+            gtk_color_dialog_set_with_alpha(
+                gtk_color_dialog_button_get_dialog(GTK_COLOR_DIALOG_BUTTON(button)), FALSE);
+            g_object_set_data(G_OBJECT(button), "lxp-ansi", GINT_TO_POINTER(i));
+            g_signal_connect(button, "notify::rgba", G_CALLBACK(on_ansi_color), ed);
+            gtk_grid_attach(GTK_GRID(grid), button, 1 + col, row + 1, 1, 1);
+            ed->ansi[i] = button;
+        }
+        gtk_widget_set_tooltip_text(reset, "Back to the colors made from the theme");
+        gtk_widget_add_css_class(reset, "flat");
+        g_object_set_data(G_OBJECT(reset), "lxp-ansi", GINT_TO_POINTER(row));
+        g_signal_connect(reset, "clicked", G_CALLBACK(on_ansi_reset), ed);
+        gtk_grid_attach(GTK_GRID(grid), reset, 3, row + 1, 1, 1);
+        ed->ansi_reset[row] = reset;
+    }
+    gtk_box_append(GTK_BOX(box), grid);
+}
+
 static void build_colors_page(Editor *ed, GtkWidget *box)
 {
     GtkWidget *colors = new_grid();
@@ -1022,6 +1123,8 @@ static void build_colors_page(Editor *ed, GtkWidget *box)
     gtk_label_set_xalign(GTK_LABEL(ed->warning), 0);
     gtk_widget_add_css_class(ed->warning, "warning");
     gtk_box_append(GTK_BOX(box), ed->warning);
+
+    build_terminal_section(ed, box);
 }
 
 static void build_appearance_page(Editor *ed, GtkWidget *box)
@@ -1298,6 +1401,11 @@ static void load_form(Editor *ed)
     set_optional(&ed->title, s.has_title, &s.title, &c.title_active);
     set_optional(&ed->panel_color, s.has_panel, &s.panel, &c.panel);
     set_optional(&ed->link, s.has_link, &s.link, &c.link);
+    for (int i = 0; i < LXP_ANSI_COLORS; i++) {
+        ed->ansi_set[i] = s.has_ansi[i];
+        set_button(ed->ansi[i], &c.ansi[i]);
+    }
+    gtk_switch_set_active(GTK_SWITCH(ed->keep_terminal), s.keep_terminal);
     {
         g_autofree char *desc = s.font ? g_strdup(s.font)
                               : g_strdup_printf("%s %g", model->font_family, model->font_size);

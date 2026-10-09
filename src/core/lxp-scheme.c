@@ -49,6 +49,10 @@ gboolean lxp_scheme_load(const LxpTheme *theme, LxpScheme *s, GError **error)
     s->has_title = get_color(theme, "title", &s->title, FALSE, NULL);
     s->has_panel = get_color(theme, "panel", &s->panel, FALSE, NULL);
     s->has_link = get_color(theme, "link", &s->link, FALSE, NULL);
+    for (int i = 0; i < LXP_ANSI_COLORS; i++) {
+        g_autofree char *key = g_strdup_printf("ansi%d", i);
+        s->has_ansi[i] = get_color(theme, key, &s->ansi[i], FALSE, NULL);
+    }
     s->font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "font");
     s->title_font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "title_font");
     s->gtk_font = lxp_theme_get_string(theme, LXP_SCHEME_GROUP, "gtk_font");
@@ -107,6 +111,10 @@ void lxp_scheme_save(const LxpScheme *s, LxpTheme *theme)
     set_color(theme, "title", &s->title, s->has_title);
     set_color(theme, "panel", &s->panel, s->has_panel);
     set_color(theme, "link", &s->link, s->has_link);
+    for (int i = 0; i < LXP_ANSI_COLORS; i++) {
+        g_autofree char *key = g_strdup_printf("ansi%d", i);
+        set_color(theme, key, &s->ansi[i], s->has_ansi[i]);
+    }
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "font", s->font && *s->font ? s->font : NULL);
     lxp_theme_set_string(theme, LXP_SCHEME_GROUP, "title_font",
                          s->title_font && *s->title_font ? s->title_font : NULL);
@@ -272,6 +280,11 @@ void lxp_scheme_derive(const LxpScheme *s, LxpSchemeColors *c)
                            : lxp_color_mix(&c->bg, &c->fg, 0.10);
     c->panel_fg = readable_on(&c->panel, &c->fg);
     c->panel_hover = lxp_color_mix(&c->panel, &c->panel_fg, 0.14);
+
+    lxp_terminal_palette(c, c->ansi);
+    for (int i = 0; i < LXP_ANSI_COLORS; i++)
+        if (s->has_ansi[i])
+            c->ansi[i] = s->ansi[i];
 }
 
 /* --- generation --------------------------------------------------------- */
@@ -912,8 +925,14 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
         set_theme_keys(theme, name, &s, &c);
         if (gen_kvantum)
             lxp_theme_set_string(theme, "Kvantum", "theme", name);
-        if (!s.keep_terminal)
+        if (!s.keep_terminal) {
             lxp_theme_set_string(theme, "Terminal", "color_scheme", name);
+        } else {
+            /* a scheme generated earlier is gone: leave the terminal as it is */
+            g_autofree char *kept = lxp_theme_get_string(theme, "Terminal", "color_scheme");
+            if (kept && g_str_has_prefix(kept, "lxp-"))
+                lxp_theme_remove_group(theme, "Terminal");
+        }
     }
     lxp_scheme_clear(&s);
     return ok;

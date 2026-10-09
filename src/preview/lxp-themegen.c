@@ -87,6 +87,11 @@ static gboolean generate_variant(LxpTheme *theme, const char *dir, int width, in
         lxp_theme_set_string(variant, LXP_SCHEME_GROUP, "accent", accent);
         for (gsize i = 0; i < G_N_ELEMENTS(optional); i++)
             lxp_theme_set_string(variant, LXP_SCHEME_GROUP, optional[i], NULL);
+        /* terminal colors picked for the other background */
+        for (int i = 0; i < LXP_ANSI_COLORS; i++) {
+            g_autofree char *key = g_strdup_printf("ansi%d", i);
+            lxp_theme_set_string(variant, LXP_SCHEME_GROUP, key, NULL);
+        }
     }
     lxp_scheme_clear(&s);
 
