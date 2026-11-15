@@ -7,7 +7,9 @@
  */
 #include "backends.h"
 
+#include "config.h"
 #include "lxp-error.h"
+#include "lxp-fileutil.h"
 #include "lxp-libconfig.h"
 #include "lxp-paths.h"
 #include "lxp-system.h"
@@ -323,13 +325,42 @@ static gboolean compositor_apply(const LxpTheme *theme, GError **error)
     return lxp_libconfig_save(conf, target, error);
 }
 
+/*
+ * Rereading its configuration makes picom give up and take back the
+ * compositor role: every program that follows it (docks, panels) sees
+ * compositing stop and start, and redraws or recreates its windows. So
+ * picom <pid> is only told to reread a configuration it has not read yet:
+ * the state file remembers which one it was last sent.
+ */
+static gboolean picom_is_current(GPid pid, const char *config, char **stamp)
+{
+    g_autofree char *path = g_build_filename(g_get_user_state_dir(), LXP_APP_ID,
+                                             "picom-loaded", NULL);
+    g_autofree char *data = NULL;
+    g_autofree char *sum = NULL;
+    g_autofree char *known = NULL;
+    gsize len = 0;
+
+    if (config && g_file_get_contents(config, &data, &len, NULL))
+        sum = g_compute_checksum_for_data(G_CHECKSUM_SHA256, (const guchar *)data, len);
+    *stamp = g_strdup_printf("%d %s\n", (int)pid, sum ? sum : "-");
+    return g_file_get_contents(path, &known, NULL, NULL) && g_str_equal(known, *stamp);
+}
+
 static gboolean compositor_reload(GError **error)
 {
     g_autofree char *config = active_config_path();
     GPid pid = lxp_process_pid("picom");
 
     if (pid > 0) {
-        kill(pid, SIGUSR1);  /* picom rereads its configuration */
+        g_autofree char *path = g_build_filename(g_get_user_state_dir(), LXP_APP_ID,
+                                                 "picom-loaded", NULL);
+        g_autofree char *stamp = NULL;
+
+        if (!picom_is_current(pid, config, &stamp)) {
+            kill(pid, SIGUSR1);  /* picom rereads its configuration */
+            lxp_write_atomic(path, stamp, -1, 0644, NULL);
+        }
         return TRUE;
     }
     if (config && g_str_has_prefix(config, g_get_user_config_dir())) {

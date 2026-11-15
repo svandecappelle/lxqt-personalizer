@@ -204,7 +204,9 @@ Rounded window corners and shadows come from the picom compositor, not
 from the Openbox theme: Openbox draws square frames. The `compositor`
 backend edits only the top-level settings it themes in `picom.conf`
 (`corner-radius`, `shadow*`, `fading`, `inactive-opacity`), keeps comments
-and exclusion lists, makes picom reload with `SIGUSR1`, checks that picom
+and exclusion lists, makes picom reload with `SIGUSR1` (only when the file
+changed since the last reload: a reload stops and restarts compositing, which
+makes docks and panels recreate their windows), checks that picom
 actually starts, and warns when your configuration expects picom but it is
 not running. The preview draws the corners and shadows.
 
