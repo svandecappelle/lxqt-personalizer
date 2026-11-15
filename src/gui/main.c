@@ -19,7 +19,7 @@ static void about_activated(GSimpleAction *action, GVariant *param, gpointer app
                           "version", LXP_VERSION,
                           "license-type", GTK_LICENSE_GPL_2_0,
                           "authors", authors,
-                          "logo-icon-name", "preferences-desktop-theme",
+                          "logo-icon-name", LXP_DBUS_ID,
                           NULL);
 }
 
@@ -46,6 +46,7 @@ static void startup(GApplication *app, gpointer user)
     g_action_map_add_action_entries(G_ACTION_MAP(app), actions, G_N_ELEMENTS(actions), app);
     gtk_application_set_accels_for_action(GTK_APPLICATION(app), "app.quit", quit_accels);
 
+    gtk_window_set_default_icon_name(LXP_DBUS_ID);
     gtk_css_provider_load_from_string(provider, css);
     gtk_style_context_add_provider_for_display(gdk_display_get_default(),
                                                GTK_STYLE_PROVIDER(provider),

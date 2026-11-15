@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.lxqt_personalizer.LxqtPersonalizer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
+  <name>Desktop Themes</name>
+  <summary>Create, preview and apply themes for LXQt and Openbox</summary>
+  <developer id="io.github.svandecappelle">
+    <name>Steeve Vandecappelle</name>
+  </developer>
+  <description>
+    <p>
+      Desktop Themes changes the whole look of an LXQt desktop in one step: Qt and GTK
+      applications, Openbox window decorations, the panel, icons, cursor, wallpaper,
+      terminal colors and compositor effects.
+    </p>
+    <ul>
+      <li>See every theme as a drawn mockup of the desktop before applying it</li>
+      <li>Try a theme for a few seconds, and go back if you do not keep it</li>
+      <li>Make a complete theme from four colors, or from a wallpaper</li>
+      <li>Start from built-in themes with light and dark versions</li>
+      <li>Switch between light and dark by time of day</li>
+      <li>Share themes as packs, and undo any change from the history</li>
+    </ul>
+    <p>
+      Changes are written to the configuration files of LXQt, Openbox, GTK, pcmanfm-qt,
+      QTerminal and picom. Each change is backed up first.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.lxqt_personalizer.LxqtPersonalizer.desktop</launchable>
+  <url type="homepage">https://github.com/svandecappelle/lxqt-personalizer</url>
+  <url type="bugtracker">https://github.com/svandecappelle/lxqt-personalizer/issues</url>
+  <url type="vcs-browser">https://github.com/svandecappelle/lxqt-personalizer</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Installed themes with a mockup of the desktop each one produces</caption>
+      <image>https://raw.githubusercontent.com/svandecappelle/lxqt-personalizer/main/data/screenshots/main.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The theme editor with its live preview</caption>
+      <image>https://raw.githubusercontent.com/svandecappelle/lxqt-personalizer/main/data/screenshots/editor.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Settings</category>
+    <category>DesktopSettings</category>
+  </categories>
+  <keywords>
+    <keyword>theme</keyword>
+    <keyword>appearance</keyword>
+    <keyword>openbox</keyword>
+    <keyword>lxqt</keyword>
+    <keyword>wallpaper</keyword>
+  </keywords>
+  <provides>
+    <binary>lxqt-personalizer</binary>
+    <binary>lxp</binary>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+</component>

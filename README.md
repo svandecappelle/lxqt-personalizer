@@ -1,5 +1,7 @@
 # lxqt-personalizer
 
+[![CI](https://github.com/svandecappelle/lxqt-personalizer/actions/workflows/ci.yml/badge.svg)](https://github.com/svandecappelle/lxqt-personalizer/actions/workflows/ci.yml)
+
 Create, preview, load and apply desktop themes for LXQt + Openbox.
 
 A theme is a directory with a `theme.ini` manifest (plus optional assets)
@@ -275,6 +277,8 @@ src/preview/        mockup renderer (cairo/pango, no GTK), icon theme lookup
 src/cli/            the `lxp` command
 src/gui/            the GTK 4 application
 tests/              GLib tests with isolated XDG directories
+data/               built-in themes, desktop entry, AppStream metainfo, icon, screenshots
+.github/workflows/  CI: build, tests and metadata validation in an Arch Linux container
 ```
 
 ## License
