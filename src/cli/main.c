@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "config.h"
 #include "lxp-apply.h"
+#include "lxp-auto.h"
 #include "lxp-backend.h"
 #include "lxp-catalog.h"
+#include "lxp-error.h"
 #include "lxp-fileutil.h"
 #include "lxp-pack.h"
 #include "lxp-paths.h"
@@ -15,6 +17,7 @@
 #include "lxp-theme.h"
 
 #include <glib-unix.h>
+#include <stdarg.h>
 #include <string.h>
 #include <locale.h>
 #include <stdio.h>
@@ -837,6 +840,259 @@ static int cmd_apply(int argc, char **argv)
     return 0;
 }
 
+/*
+ * Directory of the light or dark version of theme <name>: the theme
+ * itself or its variant, whichever has the wanted brightness.
+ */
+static char *auto_theme_dir(const char *name, gboolean dark, GError **error)
+{
+    g_autofree char *dir = resolve_usable(name, error);
+    g_autoptr(LxpTheme) theme = NULL;
+    LxpScheme s;
+    LxpSchemeColors c;
+    char *variant;
+
+    if (!dir || !(theme = lxp_theme_load(dir, error)))
+        return NULL;
+    if (!lxp_scheme_load(theme, &s, error)) {
+        g_prefix_error(error, "“%s” is not generated from colors: ", name);
+        return NULL;
+    }
+    lxp_scheme_derive(&s, &c);
+    lxp_scheme_clear(&s);
+    if (c.dark == dark)
+        return g_steal_pointer(&dir);
+
+    if (!(variant = lxp_theme_variant_dir(dir)))
+        g_set_error(error, LXP_ERROR, LXP_ERROR_UNSUPPORTED,
+                    "“%s” has no light/dark variant (set variant=true in its [Scheme], "
+                    "or “Also make a dark/light version” in the editor)", name);
+    return variant;
+}
+
+static int minute_of_day(void)
+{
+    g_autoptr(GDateTime) now = g_date_time_new_now_local();
+    return g_date_time_get_hour(now) * 60 + g_date_time_get_minute(now);
+}
+
+/* Apply the version of the scheduled theme that is due now. */
+static int auto_apply(const LxpAutoConfig *config, gboolean force)
+{
+    gboolean dark = lxp_auto_wants_dark(config, minute_of_day());
+    g_autofree char *dir = NULL;
+    g_autofree char *snapshot = NULL;
+    g_autoptr(LxpTheme) theme = NULL;
+    GError *error = NULL;
+
+    if (!force && lxp_auto_state_matches(config->theme, dark)) {
+        g_print("The %s version of “%s” was already applied.\n",
+                dark ? "dark" : "light", config->theme);
+        return 0;
+    }
+    if (!(dir = auto_theme_dir(config->theme, dark, &error)) ||
+        !(theme = lxp_theme_load(dir, &error)) ||
+        !(snapshot = lxp_apply_theme(theme, NULL, LXP_APPLY_DEFAULT, &error)))
+        return fail(error);
+    g_print("Applied “%s” (previous configuration saved as snapshot %s)\n",
+            lxp_theme_get_name(theme), snapshot);
+
+    /* without a display (timer fired before login) the session reads the files */
+    if ((g_getenv("DISPLAY") || g_getenv("WAYLAND_DISPLAY")) && !lxp_reload(NULL, &error)) {
+        g_printerr("lxp: warning: %s\n", error->message);
+        g_clear_error(&error);
+    }
+    if (!lxp_auto_set_state(config->theme, dark, &error))
+        return fail(error);
+    return 0;
+}
+
+/* Run "systemctl --user ARGS…"; FALSE with the reason when it fails. */
+static gboolean systemctl(GError **error, ...)
+{
+    g_autoptr(GPtrArray) argv = g_ptr_array_new();
+    g_autofree char *err = NULL;
+    const char *arg;
+    int status = 0;
+    va_list ap;
+
+    g_ptr_array_add(argv, (gpointer)"systemctl");
+    g_ptr_array_add(argv, (gpointer)"--user");
+    va_start(ap, error);
+    while ((arg = va_arg(ap, const char *)))
+        g_ptr_array_add(argv, (gpointer)arg);
+    va_end(ap);
+    g_ptr_array_add(argv, NULL);
+
+    if (!g_spawn_sync(NULL, (char **)argv->pdata, NULL,
+                      G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL,
+                      NULL, NULL, NULL, &err, &status, error))
+        return FALSE;
+    if (!g_spawn_check_wait_status(status, NULL)) {
+        g_set_error(error, LXP_ERROR, LXP_ERROR_FAILED, "systemctl --user %s failed: %s",
+                    (const char *)argv->pdata[2], err && *err ? g_strchomp(err) : "unknown error");
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void print_schedule(const LxpAutoConfig *config)
+{
+    g_autofree char *light = lxp_auto_format_time(config->light);
+    g_autofree char *dark = lxp_auto_format_time(config->dark);
+
+    g_print("Theme “%s”: light from %s, dark from %s.\n", config->theme, light, dark);
+}
+
+static int cmd_auto_on(int argc, char **argv)
+{
+    g_autofree char *light = NULL;
+    g_autofree char *dark = NULL;
+    gboolean no_timer = FALSE;
+    const GOptionEntry entries[] = {
+        { "light", 0, 0, G_OPTION_ARG_STRING, &light,
+          "Switch to the light version at this time (default 07:00)", "HH:MM" },
+        { "dark", 0, 0, G_OPTION_ARG_STRING, &dark,
+          "Switch to the dark version at this time (default 19:00)", "HH:MM" },
+        { "no-timer", 0, 0, G_OPTION_ARG_NONE, &no_timer,
+          "Only save the schedule: run “lxp auto run” from cron or another scheduler", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
+    g_autoptr(LxpAutoConfig) config = g_new0(LxpAutoConfig, 1);
+    g_autofree char *check = NULL;
+    GError *error = NULL;
+
+    if (!parse_options("auto on", "NAME|DIR", entries, &argc, &argv))
+        return 2;
+    config->light = LXP_AUTO_DEFAULT_LIGHT;
+    config->dark = LXP_AUTO_DEFAULT_DARK;
+    if (argc != 2 || (light && !lxp_auto_parse_time(light, &config->light)) ||
+        (dark && !lxp_auto_parse_time(dark, &config->dark))) {
+        g_printerr("Usage: lxp auto on [--light HH:MM] [--dark HH:MM] NAME|DIR\n");
+        return 2;
+    }
+    /* a directory is remembered by its full path: the timer runs elsewhere */
+    config->theme = g_file_test(argv[1], G_FILE_TEST_IS_DIR)
+                        ? g_canonicalize_filename(argv[1], NULL) : g_strdup(argv[1]);
+
+    /* both versions must exist before anything is scheduled */
+    for (int dark_version = 0; dark_version < 2; dark_version++) {
+        g_free(check);
+        if (!(check = auto_theme_dir(config->theme, dark_version, &error)))
+            return fail(error);
+    }
+    if (!lxp_auto_save(config, &error))
+        return fail(error);
+
+    if (!no_timer) {
+        g_autofree char *self = g_file_read_link("/proc/self/exe", NULL);
+
+        if (!self)
+            self = g_find_program_in_path("lxp");
+        if (!self || !lxp_auto_write_units(config, self, &error) ||
+            !systemctl(&error, "daemon-reload", NULL) ||
+            !systemctl(&error, "enable", "--now", LXP_AUTO_TIMER, NULL)) {
+            g_printerr("lxp: warning: the timer was not started: %s\n"
+                       "The schedule is saved; run “lxp auto run” from another scheduler "
+                       "to follow it.\n", error ? error->message : "cannot find lxp");
+            g_clear_error(&error);
+        }
+    }
+    print_schedule(config);
+    return auto_apply(config, TRUE);
+}
+
+static int cmd_auto_off(int argc, char **argv)
+{
+    g_autofree char *units = lxp_auto_units_dir();
+    g_autofree char *timer = g_build_filename(units, LXP_AUTO_TIMER, NULL);
+    GError *error = NULL;
+
+    if (!parse_options("auto off", "", NULL, &argc, &argv))
+        return 2;
+    if (g_file_test(timer, G_FILE_TEST_EXISTS)) {
+        /* best effort: the files are removed either way */
+        systemctl(NULL, "disable", "--now", LXP_AUTO_TIMER, NULL);
+        if (!lxp_auto_remove(&error))
+            return fail(error);
+        systemctl(NULL, "daemon-reload", NULL);
+    } else if (!lxp_auto_remove(&error)) {
+        return fail(error);
+    }
+    g_print("Automatic light/dark switching is off; the current theme stays.\n");
+    return 0;
+}
+
+static int cmd_auto_run(int argc, char **argv)
+{
+    gboolean force = FALSE;
+    const GOptionEntry entries[] = {
+        { "force", 'f', 0, G_OPTION_ARG_NONE, &force,
+          "Apply even when this version was the last one applied", NULL },
+        G_OPTION_ENTRY_NULL,
+    };
+    g_autoptr(LxpAutoConfig) config = NULL;
+    GError *error = NULL;
+
+    if (!parse_options("auto run", "", entries, &argc, &argv))
+        return 2;
+    if (!(config = lxp_auto_load(&error)))
+        return fail(error);
+    return auto_apply(config, force);
+}
+
+static int cmd_auto_status(int argc, char **argv)
+{
+    g_autoptr(LxpAutoConfig) config = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *units = lxp_auto_units_dir();
+    g_autofree char *timer = g_build_filename(units, LXP_AUTO_TIMER, NULL);
+    g_autofree char *state = lxp_auto_get_state();
+
+    if (!parse_options("auto status", "", NULL, &argc, &argv))
+        return 2;
+    if (!(config = lxp_auto_load(&error))) {
+        if (g_error_matches(error, LXP_ERROR, LXP_ERROR_NOT_FOUND)) {
+            g_print("Automatic light/dark switching is off.\n");
+            return 0;
+        }
+        g_printerr("lxp: %s\n", error->message);
+        return 1;
+    }
+    print_schedule(config);
+    g_print("Due now: %s. Last applied: %s.\n",
+            lxp_auto_wants_dark(config, minute_of_day()) ? "dark" : "light",
+            state ? state : "nothing yet");
+    if (!g_file_test(timer, G_FILE_TEST_EXISTS))
+        g_print("No timer is installed: “lxp auto run” must be run by another scheduler.\n");
+    else if (!systemctl(NULL, "--quiet", "is-active", LXP_AUTO_TIMER, NULL))
+        g_print("The timer %s is installed but not running.\n", LXP_AUTO_TIMER);
+    else
+        g_print("The timer %s is running.\n", LXP_AUTO_TIMER);
+    return 0;
+}
+
+static int cmd_auto(int argc, char **argv)
+{
+    static const Command sub[] = {
+        { "on",     "NAME|DIR", "Follow a schedule with this theme", cmd_auto_on },
+        { "off",    "",         "Stop switching",                    cmd_auto_off },
+        { "run",    "",         "Apply the version due now",         cmd_auto_run },
+        { "status", "",         "Show the schedule",                 cmd_auto_status },
+    };
+
+    if (argc >= 2)
+        for (gsize i = 0; i < G_N_ELEMENTS(sub); i++)
+            if (g_str_equal(argv[1], sub[i].name))
+                return sub[i].func(argc - 1, argv + 1);
+
+    fprintf(argc >= 2 && g_str_has_suffix(argv[1], "help") ? stdout : stderr,
+            "Usage: lxp auto on [--light HH:MM] [--dark HH:MM] NAME|DIR\n"
+            "       lxp auto off | run [--force] | status\n\n"
+            "Switch a theme between its light and dark versions by time of day.\n");
+    return argc >= 2 && g_str_has_suffix(argv[1], "help") ? 0 : 2;
+}
+
 static const Command commands[] = {
     { "backends",  "",          "List supported desktop components",          cmd_backends },
     { "capture",   "NAME",      "Save the current desktop look as a theme",   cmd_capture },
@@ -849,6 +1105,7 @@ static const Command commands[] = {
     { "show",      "NAME|DIR",  "Print a theme manifest",                     cmd_show },
     { "preview",   "NAME|DIR",  "Render a desktop mockup of a theme to PNG",  cmd_preview },
     { "apply",     "NAME|DIR",  "Apply a theme (--try N to confirm or revert)", cmd_apply },
+    { "auto",      "on|off|run|status", "Switch between light and dark by time of day", cmd_auto },
     { "reload",    "",          "Make running programs reread their config",  cmd_reload },
     { "snapshot",  "[LABEL]",   "Back up the current configuration files",    cmd_snapshot },
     { "snapshots", "",          "List configuration snapshots",               cmd_snapshots },

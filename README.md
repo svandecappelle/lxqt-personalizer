@@ -65,6 +65,16 @@ wallpaper is copied into the theme folder.
 |---|---|
 | **Mac-like** | Light (with a dark version), frosted top bar with flat task buttons, colored window buttons on the left, centered titles, no borders, 12 px window corners with deep soft shadows, rounded 6 px widgets, smooth animations, soft color-field wallpaper. |
 | **Win11-like** | Light (with a dark version), frosted 46 px taskbar with underlined active buttons, minimal window buttons with a red close on hover, left titles, 8 px window corners, 4 px widgets, subtle animations, wave wallpaper. |
+| **Nord** | Dark blue-grey (with a light version), frost accent, minimal window buttons, slim top panel with pill task buttons, 8 px corners, wave wallpaper. |
+| **Gruvbox** | Dark warm brown (with a light version), yellow accent, classic square windows with a 2 px border, bottom panel, no effects, geometric wallpaper. |
+| **Catppuccin** | Dark indigo (with a light version), mauve accent, colored window buttons, 8 px widgets, 12 px corners, translucent top panel, blob wallpaper. |
+| **Solarized** | Light cream (with a dark version), blue accent, gradient title bars, bottom panel, gradient wallpaper. |
+| **Dracula** | Dark charcoal (with a light version), purple accent, colored window buttons on the left, flat bottom panel, wave wallpaper. |
+| **High Contrast** | White on black, cyan accent and title bars, 3 px borders, larger text and panel, square corners, no transparency, shadows or animations. |
+
+The palette themes also set the 16 terminal colors of their palette. Their
+other version is derived by flipping the colors, so it is not the palette's
+official light or dark flavor.
 
 Built-ins are installed read-only in `/usr/share/lxqt-personalizer/themes`
 and generated into `~/.cache/lxqt-personalizer` on first use. **Duplicate &
@@ -103,11 +113,33 @@ so the Win11-like taskbar keeps them on the left.
 - **Light and dark in one theme** — `variant=true` also generates the
   opposite version (*Also make a dark/light version* in the editor); the
   app shows a Light/Dark switch, and `lxp apply|preview --variant` uses it.
+- **Light by day, dark by night** — `lxp auto on THEME` switches a theme
+  with both versions on a schedule (see below).
 - **Accent folders** — `folder_color=true` recolors the folder icons of an
   SVG icon theme (Breeze, Papirus…) to the accent, as a small generated icon
   theme that inherits the original.
 - **Surprise me** — a random, harmonious design in one click, or
   `lxp new --surprise [NAME]`.
+
+## Light by day, dark by night
+
+```sh
+lxp auto on nord --light 07:30 --dark 19:00   # defaults: 07:00 and 19:00
+lxp auto status
+lxp auto off
+```
+
+`auto on` needs a theme with both versions (`variant=true`; every built-in
+except High Contrast). It applies the version due now, saves the schedule
+in `~/.config/lxqt-personalizer/auto.conf` and starts a systemd user timer
+(`~/.config/systemd/user/lxp-auto.timer`) that runs `lxp auto run` at both
+times, and at login when a switch was missed while the computer was off.
+
+`auto run` does nothing when the version due was the last one it applied,
+so a theme you apply by hand stays until the next switch (`--force` applies
+anyway). Without systemd, `lxp auto on --no-timer` only saves the schedule:
+run `lxp auto run` from cron or at login. Each switch takes a snapshot like
+any apply, and only the 20 most recent snapshots are kept.
 
 ## Sharing themes
 
@@ -189,6 +221,7 @@ lxp generate my-theme        # regenerate from [Scheme]
 lxp export my-theme | lxp import FILE | lxp check my-theme
 lxp apply my-theme --try 15  # apply, revert unless confirmed within 15 s
 lxp apply my-theme --only openbox,cursor
+lxp auto on my-theme --light 07:30 --dark 19:00   # light by day, dark by night
 lxp reload                   # make running programs reread their config
 lxp snapshot [LABEL]         # back up the managed config files
 lxp snapshots                # list backups

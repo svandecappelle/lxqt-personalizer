@@ -15,6 +15,7 @@ add_custom_command(
 add_library(lxp STATIC
     ${CMAKE_CURRENT_BINARY_DIR}/lxp-templates.c
     lxp-assets.c
+    lxp-auto.c
     lxp-pack.c
     lxp-recolor.c
     lxp-scheme.c

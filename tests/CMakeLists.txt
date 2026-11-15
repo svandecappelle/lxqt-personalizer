@@ -1,4 +1,4 @@
-foreach(name ini color theme backends snapshot apply pack)
+foreach(name ini color theme backends snapshot apply pack auto)
     add_executable(test-${name} test-${name}.c)
     target_link_libraries(test-${name} PRIVATE lxp)
     target_compile_definitions(test-${name} PRIVATE
@@ -7,7 +7,7 @@ foreach(name ini color theme backends snapshot apply pack)
 endforeach()
 
 # Tests that also need the preview library
-foreach(name preview generate compositor tier1 tier3)
+foreach(name preview generate compositor tier1 tier3 builtin)
     add_executable(test-${name} test-${name}.c)
     target_link_libraries(test-${name} PRIVATE lxp-preview)
     target_compile_definitions(test-${name} PRIVATE
