@@ -208,6 +208,14 @@ and exclusion lists, makes picom reload with `SIGUSR1`, checks that picom
 actually starts, and warns when your configuration expects picom but it is
 not running. The preview draws the corners and shadows.
 
+With blur on, picom would blur behind the whole rectangle of every window
+that has transparency, so a dock with a wide transparent window (Plank and
+similar) turns into a blurred band across the screen. The backend therefore
+writes a `blur-background-exclude` list: blur stays behind ordinary windows
+and the LXQt panel, and is off for other docks, the desktop, menus,
+tooltips and the shadow margins of GTK windows. A list you wrote yourself,
+or a picom `rules` setting, is left alone.
+
 ## Usage
 
 ```sh

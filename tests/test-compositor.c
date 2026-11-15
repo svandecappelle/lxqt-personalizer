@@ -246,6 +246,19 @@ static void test_blur_and_animations(void)
     g_assert_nonnull(strstr(conf, "blur-strength = 7;"));
     g_assert_nonnull(strstr(conf, "preset = \"geometry-change\""));
     g_assert_null(strstr(conf, "fly-in"));
+    /* transparent docks, menus and shadow margins are not blurred */
+    g_assert_nonnull(strstr(conf, "blur-background-exclude = [\n"
+                                  "  \"window_type = 'dock' && class_g != 'lxqt-panel'\","));
+    g_assert_nonnull(strstr(conf, "\"_GTK_FRAME_EXTENTS@\"\n];"));
+
+    /* a list the user wrote is theirs */
+    write_file(g_get_user_config_dir(), "picom.conf",
+               "blur-background-exclude = [ \"class_g = 'mine'\" ];\n");
+    g_assert_true(compositor->apply(theme, &error));
+    g_clear_pointer(&conf, g_free);
+    conf = read_file(g_get_user_config_dir(), "picom.conf");
+    g_assert_nonnull(strstr(conf, "blur-background-exclude = [ \"class_g = 'mine'\" ];"));
+    g_assert_null(strstr(conf, "lxqt-panel"));
 
     /* and captured back as the same preset */
     g_assert_true(compositor->capture(captured, &error));

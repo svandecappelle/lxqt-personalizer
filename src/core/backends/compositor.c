@@ -127,6 +127,27 @@ static const struct {
       ")" },
 };
 
+/*
+ * picom blurs behind the whole rectangle of every window that has an alpha
+ * channel, however little of it is painted: a dock that keeps a wide
+ * transparent window for its zoom effect becomes a blurred band across the
+ * screen, and the shadow margins of GTK windows and of Qt menus and
+ * tooltips become blurred boxes. Blur is kept for ordinary windows and for
+ * the LXQt panel only.
+ */
+#define BLUR_EXCLUDE_KEY "blur-background-exclude"
+static const char blur_exclude[] =
+    "[\n"
+    "  \"window_type = 'dock' && class_g != 'lxqt-panel'\",\n"
+    "  \"window_type = 'desktop'\",\n"
+    "  \"window_type = 'menu'\",\n"
+    "  \"window_type = 'dropdown_menu'\",\n"
+    "  \"window_type = 'popup_menu'\",\n"
+    "  \"window_type = 'tooltip'\",\n"
+    "  \"window_type = 'dnd'\",\n"
+    "  \"_GTK_FRAME_EXTENTS@\"\n"
+    "]";
+
 static const char *animation_value(const char *name)
 {
     for (gsize i = 0; i < G_N_ELEMENTS(animation_presets); i++)
@@ -286,8 +307,15 @@ static gboolean compositor_apply(const LxpTheme *theme, GError **error)
         if (on) {
             lxp_libconfig_set_raw(conf, "blur-method",
                                   g_str_equal(on, "true") ? "\"dual_kawase\"" : "\"none\"");
-            if (g_str_equal(on, "true"))
+            if (g_str_equal(on, "true")) {
+                g_autofree char *excluded = lxp_libconfig_get(conf, BLUR_EXCLUDE_KEY);
+                g_autofree char *rules = lxp_libconfig_get(conf, "rules");
+
                 lxp_libconfig_set(conf, "blur-strength", level ? level : "5");
+                /* the user's own list, or picom 12 "rules", decide instead */
+                if (!excluded && !rules)
+                    lxp_libconfig_set_raw(conf, BLUR_EXCLUDE_KEY, blur_exclude);
+            }
         }
         if (value)  /* "custom" or unset: leave the user's animations alone */
             lxp_libconfig_set_raw(conf, "animations", value);
