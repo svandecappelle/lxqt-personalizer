@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "lxp-icons.h"
 #include "lxp-preview-render.h"
+#include "lxp-qss.h"
 #include "test-util.h"
 
 #include <string.h>
@@ -121,6 +122,108 @@ static void test_model(void)
     g_assert_null(d->wallpaper);
 }
 
+static void test_panel_qss(void)
+{
+    g_autoptr(LxpTheme) theme = lxp_theme_new("Themed");
+    g_autoptr(LxpPreviewModel) palette = NULL;
+    g_autoptr(LxpPreviewModel) m = NULL;
+    g_autoptr(LxpPreviewModel) colored = NULL;
+    g_autofree char *hex = NULL;
+    LxpPanelQss q;
+
+    lxp_theme_set_string(theme, "LXQt Palette", "highlight_color", "#3584e4");
+    palette = lxp_preview_model_new(theme);
+
+    lxp_panel_qss_parse(
+        "/* { color: red; } */\n"
+        "LXQtPanel #BackgroundWidget {\n"
+        "  background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #515048, stop:1 #3C3B37);\n"
+        "}\n"
+        "LXQtPanel[position=\"Top\"] #BackgroundWidget { background: #ff0000; }\n"
+        "LXQtPanel[position=\"Bottom\"][layoutDirection=\"1\"] #BackgroundWidget { background: #00ff00; }\n"
+        "LXQtPanel QSpinBox { color: #000000; background: #ffffff; }\n"
+        "#TaskBar QToolButton { color: #f5f5f5; border-bottom: 2px solid #454545; background: transparent; }\n"
+        "#TaskBar QToolButton:hover, #TaskBar QToolButton:on { background: rgba(0, 0, 0, 45%); }\n"
+        "#TaskBar QToolButton:on { border-bottom: 2px solid palette(highlight); }\n"
+        "#TaskBar QToolButton[urgent=\"true\"] { background: #0000ff; }\n",
+        NULL, "Bottom", palette, &q);
+    g_assert_true(q.has_bg);
+    hex = lxp_color_to_hex(&q.bg);
+    g_assert_cmpstr(hex, ==, "#515048");
+    g_clear_pointer(&hex, g_free);
+    hex = lxp_color_to_hex(&q.bg_to);
+    g_assert_cmpstr(hex, ==, "#3c3b37");
+    g_clear_pointer(&hex, g_free);
+    g_assert_false(q.has_text);
+    g_assert_false(q.task.has_bg);  /* transparent */
+    g_assert_true(q.task.has_text && q.task_active.has_text);
+    g_assert_cmpint(q.task.edge_side, ==, 'b');
+    g_assert_true(q.task_active.has_bg);
+    g_assert_cmpfloat_with_epsilon(q.task_active.bg.a, 0.45, 0.001);
+    hex = lxp_color_to_hex(&q.task_active.edge);
+    g_assert_cmpstr(hex, ==, "#3584e4");
+    g_clear_pointer(&hex, g_free);
+
+    /* rules for the panel's own position apply */
+    lxp_panel_qss_parse("LXQtPanel #BackgroundWidget { background: rgba(40, 40, 40, 60%); }\n"
+                        "LXQtPanel[position=\"Top\"] #BackgroundWidget { background: #ff0000; }",
+                        NULL, "Top", palette, &q);
+    hex = lxp_color_to_hex(&q.bg);
+    g_assert_cmpstr(hex, ==, "#ff0000");
+    g_clear_pointer(&hex, g_free);
+
+    /* a theme naming an installed LXQt theme is previewed with its panel */
+    write_file(g_get_user_data_dir(), "lxqt/themes/Smoky/lxqt-panel.qss",
+               "LXQtPanel #BackgroundWidget { background: rgba(40, 40, 40, 60%); }\n"
+               "#TaskBar QToolButton:on { background: #b95832; }\n");
+    lxp_theme_set_string(theme, "LXQt", "theme", "Smoky");
+    m = lxp_preview_model_new(theme);
+    hex = lxp_color_to_hex(&m->panel_bg);
+    g_assert_cmpstr(hex, ==, "#282828");
+    g_clear_pointer(&hex, g_free);
+    g_assert_cmpfloat_with_epsilon(m->panel_opacity, 0.6, 0.001);
+    g_assert_cmpstr(m->panel_style, ==, "theme");
+    g_assert_true(m->panel_task_active.has_bg);
+    /* readable on the theme's dark panel, whatever the palette says */
+    g_assert_cmpfloat(lxp_color_contrast(&m->panel_text, &m->panel_bg), >=, 3);
+
+    /* a theme drawn with pictures: the middle of the picture is the fill */
+    {
+        g_autoptr(LxpPreviewModel) pictured = NULL;
+        g_autofree char *fill = NULL;
+
+        write_file(g_get_user_data_dir(), "lxqt/themes/Pictured/panel.svg",
+                   "<svg xmlns='http://www.w3.org/2000/svg' width='11' height='11'>"
+                   "<rect width='11' height='11' fill='#00ffff'/>"
+                   "<rect x='2' y='2' width='7' height='7' fill='#100e23'/></svg>");
+        write_file(g_get_user_data_dir(), "lxqt/themes/Pictured/lxqt-panel.qss",
+                   "LXQtPanel[position=\"Bottom\"] #BackgroundWidget {\n"
+                   "  border-image: url(panel.svg) 3 3 3 3 stretch stretch; }\n"
+                   "LXQtPanel[position=\"Bottom\"] Plugin > QToolButton { color: #ffffff; }\n"
+                   "LXQtPanel[position=\"Bottom\"] #TaskBar > QToolButton:on {\n"
+                   "  border-image: url(../../../../escape.svg) 1; }\n");
+        lxp_theme_set_string(theme, "LXQt", "theme", "Pictured");
+        pictured = lxp_preview_model_new(theme);
+        fill = lxp_color_to_hex(&pictured->panel_bg);
+        g_assert_cmpstr(fill, ==, "#100e23");
+        g_assert_false(pictured->panel_gradient);
+        g_clear_pointer(&fill, g_free);
+        fill = lxp_color_to_hex(&pictured->panel_text);
+        g_assert_cmpstr(fill, ==, "#ffffff");
+        /* files outside the theme are not read */
+        g_assert_false(pictured->panel_task_active.has_bg);
+    }
+
+    /* a panel color of the user's replaces the theme's background */
+    lxp_theme_set_string(theme, "Panel", "background-color", "#00ff00");
+    lxp_theme_set_string(theme, "Panel", "opacity", "50");
+    colored = lxp_preview_model_new(theme);
+    hex = lxp_color_to_hex(&colored->panel_bg);
+    g_assert_cmpstr(hex, ==, "#00ff00");
+    g_assert_cmpfloat(colored->panel_opacity, ==, 0.5);
+    g_assert_cmpstr(colored->panel_style, ==, "theme");
+}
+
 static guint32 pixel(cairo_surface_t *s, int x, int y)
 {
     const guint8 *data = cairo_image_surface_get_data(s);
@@ -173,5 +276,6 @@ int main(int argc, char **argv)
     g_test_add_func("/preview/icons", test_icons);
     g_test_add_func("/preview/model", test_model);
     g_test_add_func("/preview/render", test_render);
+    g_test_add_func("/preview/panel-qss", test_panel_qss);
     return g_test_run();
 }

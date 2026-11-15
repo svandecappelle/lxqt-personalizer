@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "lxp-preview-model.h"
 
+#include "lxp-backend.h"
+#include "lxp-qss.h"
+
 #include "lxp-assets.h"
 #include "lxp-icons.h"
 #include "lxp-ini.h"
@@ -257,6 +260,60 @@ static int theme_int(const LxpTheme *theme, const char *group, const char *key,
     return value ? atoi(value) : fallback;
 }
 
+/*
+ * The panel of an installed LXQt theme (not one generated from the colors),
+ * from its stylesheet. A panel color set in the theme (<has_bg>, <has_fg>)
+ * still wins, as in lxqt-panel. FALSE when the theme names no such theme
+ * or it cannot be read.
+ */
+static gboolean load_installed_panel(LxpPreviewModel *m, const LxpTheme *theme,
+                                     gboolean has_bg, gboolean has_fg)
+{
+    g_autofree char *name = lxp_theme_get_string(theme, "LXQt", "theme");
+    g_autofree char *dir = NULL;
+    g_autofree char *path = NULL;
+    LxpPanelQss qss;
+
+    if (!name || g_str_has_prefix(name, "lxp-") ||
+        !(dir = lxp_backend_locate(theme, "lxqt/themes", name, "lxqt-panel.qss")))
+        return FALSE;
+    path = g_build_filename(dir, "lxqt-panel.qss", NULL);
+    if (!lxp_panel_qss_load(path, m->panel_position, m, &qss))
+        return FALSE;
+
+    if (!has_bg) {
+        /* the opacity setting only applies to a panel color of the user's */
+        m->panel_bg = qss.has_bg ? qss.bg : m->window;
+        m->panel_bg_to = qss.has_bg ? qss.bg_to : m->window;
+        m->panel_opacity = (m->panel_bg.a + m->panel_bg_to.a) / 2;
+        m->panel_bg.a = m->panel_bg_to.a = 1;
+        m->panel_gradient = memcmp(&m->panel_bg, &m->panel_bg_to, sizeof m->panel_bg) != 0;
+    }
+    if (!has_fg) {
+        if (qss.has_text) {
+            m->panel_text = qss.text;
+        } else if (qss.has_button_text) {
+            m->panel_text = qss.button_text;
+        } else if (qss.task.has_text) {
+            m->panel_text = qss.task.text;
+        } else {
+            /* Qt's own text color; themes that need another set it somewhere */
+            LxpColor mid = lxp_color_mix(&m->panel_bg, &m->panel_bg_to, 0.5);
+            LxpColor white = { 1, 1, 1, 1 }, black = { 0, 0, 0, 1 };
+
+            m->panel_text = m->window_text;
+            if (lxp_color_contrast(&m->panel_text, &mid) < 3)
+                m->panel_text = lxp_color_contrast(&white, &mid) > lxp_color_contrast(&black, &mid)
+                                    ? white : black;
+        }
+    }
+    m->panel_task = qss.task;
+    m->panel_task_active = qss.task_active;
+    g_free(m->panel_style);
+    m->panel_style = g_strdup("theme");
+    return TRUE;
+}
+
 static void load_panel(LxpPreviewModel *m, const LxpTheme *theme)
 {
     g_autofree char *position = lxp_theme_get_string(theme, "Panel", "position");
@@ -292,6 +349,11 @@ static void load_panel(LxpPreviewModel *m, const LxpTheme *theme)
     /* Without a panel color, the LXQt theme decides: ours if generated. */
     if (has_scheme)
         lxp_scheme_derive(&scheme, &colors);
+    if (load_installed_panel(m, theme, lxp_qt_color_parse(bg, &m->panel_bg),
+                             lxp_qt_color_parse(fg, &m->panel_text))) {
+        lxp_scheme_clear(&scheme);
+        return;
+    }
     if (!lxp_qt_color_parse(bg, &m->panel_bg))
         m->panel_bg = has_scheme ? colors.panel : m->window;
     if (!lxp_qt_color_parse(fg, &m->panel_text))

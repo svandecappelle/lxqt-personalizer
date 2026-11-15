@@ -189,6 +189,11 @@ live preview:
 - **Effects** — corner radius, shadows (strength, blur, offsets), inactive
   window opacity, fading (picom).
 
+With an installed LXQt theme, the mockup draws the panel from that theme's
+`lxqt-panel.qss`: background (plain, translucent or gradient), text color
+and the task buttons' fill and border. Images and per-plugin styling are not
+drawn, so it is an approximation.
+
 The window, GTK and LXQt themes are either *Generated from colors* or an
 installed theme; the choice is stored as `generate=` in `[Scheme]`, so
 `lxp generate` keeps installed choices. Fusion is the widget style that

@@ -699,8 +699,26 @@ static void draw_panel(Ctx *ctx)
     cairo_clip(cr);
     if (m->blur && m->panel_opacity < 1)
         draw_blurred_wallpaper(ctx, p);
-    fill_rect(cr, p, &m->panel_bg, m->panel_opacity);
-    if (horizontal)
+    if (m->panel_gradient) {
+        /* themes shade the panel across its thickness */
+        cairo_pattern_t *shade = horizontal
+            ? cairo_pattern_create_linear(0, p.y, 0, p.y + p.h)
+            : cairo_pattern_create_linear(p.x, 0, p.x + p.w, 0);
+
+        cairo_pattern_add_color_stop_rgba(shade, 0, m->panel_bg.r, m->panel_bg.g,
+                                          m->panel_bg.b, m->panel_opacity);
+        cairo_pattern_add_color_stop_rgba(shade, 1, m->panel_bg_to.r, m->panel_bg_to.g,
+                                          m->panel_bg_to.b, m->panel_opacity);
+        cairo_set_source(cr, shade);
+        cairo_rectangle(cr, p.x, p.y, p.w, p.h);
+        cairo_fill(cr);
+        cairo_pattern_destroy(shade);
+    } else {
+        fill_rect(cr, p, &m->panel_bg, m->panel_opacity);
+    }
+    if (g_strcmp0(m->panel_style, "theme") == 0)
+        ;  /* an installed theme draws its own edge, or none */
+    else if (horizontal)
         fill_rect(cr, (Rect){ p.x, g_str_equal(m->panel_position, "Top") ? p.y + p.h - 1 : p.y,
                               p.w, 1 }, &edge, m->panel_opacity);
     else
@@ -735,8 +753,41 @@ static void draw_panel(Ctx *ctx)
         Rect b = horizontal ? (Rect){ p.x + pos, p.y + 3, len, p.h - 6 }
                             : (Rect){ p.x + 2, p.y + pos, thick - 4, len };
 
-        /* the generated LXQt theme's task button style */
-        if (g_strcmp0(m->panel_style, "pills") == 0) {
+        const LxpColor *task_text = &m->panel_text;
+
+        if (g_strcmp0(m->panel_style, "theme") == 0) {
+            /* as the installed LXQt theme styles them */
+            const LxpPanelTaskStyle *st = i == 0 ? &m->panel_task_active : &m->panel_task;
+            Rect in = inset(b, 1);
+
+            if (st->has_bg) {
+                rounded(cr, in, 3);
+                set_color(cr, &st->bg, 1);
+                cairo_fill(cr);
+            } else if (i == 0 && !st->has_edge) {
+                /* nothing set: Qt's sunken look for the pressed button */
+                rounded(cr, in, 3);
+                set_color(cr, &m->panel_text, 0.14);
+                cairo_fill(cr);
+            }
+            if (st->has_edge) {
+                double w = 2;
+
+                switch (st->edge_side) {
+                case 't': fill_rect(cr, (Rect){ in.x, in.y, in.w, w }, &st->edge, 1); break;
+                case 'b': fill_rect(cr, (Rect){ in.x, in.y + in.h - w, in.w, w }, &st->edge, 1); break;
+                case 'l': fill_rect(cr, (Rect){ in.x, in.y, w, in.h }, &st->edge, 1); break;
+                case 'r': fill_rect(cr, (Rect){ in.x + in.w - w, in.y, w, in.h }, &st->edge, 1); break;
+                default:
+                    rounded(cr, inset(in, 0.5), 3);
+                    set_color(cr, &st->edge, 1);
+                    cairo_set_line_width(cr, 1);
+                    cairo_stroke(cr);
+                }
+            }
+            if (st->has_text)
+                task_text = &st->text;
+        } else if (g_strcmp0(m->panel_style, "pills") == 0) {
             Rect pill = inset(b, 1);
             rounded(cr, pill, MIN(pill.w, pill.h) / 2);
             if (i == 0)
@@ -761,7 +812,7 @@ static void draw_panel(Ctx *ctx)
         if (labels) {
             icon(ctx, names, b.x + 6, p.y + off, isz);
             ui_text(ctx, (Rect){ b.x + isz + 12, b.y, b.w - isz - 18, b.h }, label,
-                    &m->panel_text, ALIGN_LEFT);
+                    task_text, ALIGN_LEFT);
         } else if (horizontal) {
             icon(ctx, names, b.x + (b.w - isz) / 2, p.y + off, isz);
         } else {

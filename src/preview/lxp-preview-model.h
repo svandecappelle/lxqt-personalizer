@@ -33,6 +33,13 @@ typedef struct {
     LxpColor client;             /* client padding area */
 } LxpDecoration;
 
+/* A panel task button as an installed LXQt theme styles it. */
+typedef struct {
+    gboolean has_bg, has_text, has_edge;
+    LxpColor bg, text, edge;
+    char     edge_side;          /* 't', 'b', 'l', 'r', or 'a' (all around) */
+} LxpPanelTaskStyle;
+
 typedef struct {
     char    *name;               /* theme display name */
 
@@ -61,7 +68,7 @@ typedef struct {
 
     /* LXQt panel */
     char    *panel_position;     /* "Bottom", "Top", "Left", "Right" */
-    char    *panel_style;        /* task buttons: underline, pills, flat */
+    char    *panel_style;        /* task buttons: underline, pills, flat, theme */
     int      panel_size;
     int      panel_icon_size;
     double   panel_opacity;      /* 0..1 */
@@ -70,6 +77,10 @@ typedef struct {
     int      panel_alignment;    /* -1 start, 0 center, 1 end */
     gboolean panel_reserve_space;
     LxpColor panel_bg, panel_text;
+    /* from an installed LXQt theme's stylesheet (panel_style "theme") */
+    gboolean panel_gradient;     /* panel_bg to panel_bg_to, across the panel */
+    LxpColor panel_bg_to;
+    LxpPanelTaskStyle panel_task, panel_task_active;
 
     /* Compositor (picom); defaults are picom's */
     int      corner_radius;

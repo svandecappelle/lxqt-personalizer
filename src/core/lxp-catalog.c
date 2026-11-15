@@ -172,7 +172,8 @@ GPtrArray *lxp_catalog_list(LxpCatalogKind kind)
         scan(names, seen, "themes", "gtk-3.0/gtk.gresource");
         break;
     case LXP_CATALOG_LXQT:
-        scan(names, seen, "lxqt/themes", NULL);
+        /* other things get unpacked there; a theme styles the panel */
+        scan(names, seen, "lxqt/themes", "lxqt-panel.qss");
         break;
     case LXP_CATALOG_CURSORS:
         scan(names, seen, "icons", "cursors");
