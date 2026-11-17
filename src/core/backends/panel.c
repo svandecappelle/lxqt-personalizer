@@ -21,6 +21,9 @@
 #define PANEL_CONF    "lxqt/panel.conf"
 #define PANEL_MODULE  "lxqt-panel.desktop"
 #define STOP_TIMEOUT  (5 * G_USEC_PER_SEC)
+#define SETTLE_TIMEOUT (2 * G_USEC_PER_SEC)   /* for the session to see the panel quit */
+#define START_TIMEOUT  (3 * G_USEC_PER_SEC)   /* for the panel to appear, per attempt */
+#define START_ATTEMPTS 3
 
 /* Values are copied raw (colors are Qt "@Variant(...)" blobs). */
 static const char *const keys[] = {
@@ -147,6 +150,27 @@ static void session_call(GDBusConnection *bus, const char *method)
     g_dbus_connection_flush_sync(bus, NULL, NULL);
 }
 
+/* Does lxqt-session still count the panel among its running modules? */
+static gboolean session_runs_panel(GDBusConnection *bus)
+{
+    g_autoptr(GVariant) reply = g_dbus_connection_call_sync(
+        bus, "org.lxqt.session", "/LXQtSession", "org.lxqt.session", "listModules",
+        NULL, NULL, G_DBUS_CALL_FLAGS_NONE, 1000, NULL, NULL);
+    g_autoptr(GVariant) value = NULL;
+    g_autoptr(GVariant) list = NULL;
+    g_autofree const char **names = NULL;
+
+    if (!reply || g_variant_n_children(reply) != 1)
+        return FALSE;  /* cannot tell: do not wait for it */
+    value = g_variant_get_child_value(reply, 0);
+    list = g_variant_is_of_type(value, G_VARIANT_TYPE_VARIANT) ? g_variant_get_variant(value)
+                                                               : g_variant_ref(value);
+    if (!g_variant_is_of_type(list, G_VARIANT_TYPE_STRING_ARRAY))
+        return FALSE;
+    names = g_variant_get_strv(list, NULL);
+    return g_strv_contains(names, PANEL_MODULE);
+}
+
 static gboolean panel_reload(GError **error)
 {
     g_autofree char *path = lxp_paths_user_config(PANEL_CONF);
@@ -183,8 +207,29 @@ static gboolean panel_reload(GError **error)
             return FALSE;
     }
 
-    session_call(bus, "startModule");
-    return TRUE;
+    /*
+     * The session only starts a module it knows to be stopped, and it may
+     * learn that the panel quit a moment after the process is gone: a start
+     * asked too early is ignored, leaving no panel at all. So wait for the
+     * session, then make sure the panel really comes back.
+     */
+    deadline = g_get_monotonic_time() + SETTLE_TIMEOUT;
+    while (session_runs_panel(bus) && g_get_monotonic_time() < deadline)
+        g_usleep(50 * 1000);
+
+    for (int attempt = 0; attempt < START_ATTEMPTS; attempt++) {
+        session_call(bus, "startModule");
+        deadline = g_get_monotonic_time() + START_TIMEOUT;
+        while (g_get_monotonic_time() < deadline) {
+            g_auto(GStrv) started = lxp_process_find("lxqt-panel");
+            if (started)
+                return TRUE;
+            g_usleep(100 * 1000);
+        }
+    }
+    g_set_error_literal(error, LXP_ERROR, LXP_ERROR_FAILED,
+                        "lxqt-panel did not start again; start it with “lxqt-panel”");
+    return FALSE;
 }
 
 const LxpBackend lxp_backend_panel = {
