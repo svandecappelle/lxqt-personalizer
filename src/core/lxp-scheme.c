@@ -934,6 +934,7 @@ gboolean lxp_scheme_generate(LxpTheme *theme, const char *dir, GError **error)
     if (ok && !s.keep_lxqt)
         ok = write_marker(lxqt_dir, error) &&
              write_template("lxqt-panel.qss", vars, lxqt_dir, "lxqt-panel.qss", error) &&
+             write_template("mainmenu.svg", vars, lxqt_dir, "mainmenu.svg", error) &&
              write_template("lxqt-runner.qss", vars, lxqt_dir, "lxqt-runner.qss", error) &&
              write_template("lxqt-notificationd.qss", vars, lxqt_dir,
                             "lxqt-notificationd.qss", error);

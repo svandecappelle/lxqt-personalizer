@@ -46,9 +46,10 @@ void        lxp_theme_remove_group(LxpTheme *theme, const char *group);
 char       *lxp_theme_to_data(const LxpTheme *theme);
 
 /*
- * Make the theme self-contained: copy an absolute [Wallpaper] file that
- * lives outside <dir> into <dir> as "wallpaper.<ext>" and refer to it
- * relatively.
+ * Make the theme self-contained: copy an absolute [Wallpaper] file, and
+ * an absolute [Panel] menu_icon, that live outside <dir> into <dir> as
+ * "wallpaper.<ext>" and "menu-icon.<ext>" and refer to them by these
+ * relative names.
  */
 gboolean    lxp_theme_bundle_wallpaper(LxpTheme *theme, const char *dir, GError **error);
 

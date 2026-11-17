@@ -221,6 +221,7 @@ static int cmd_new(int argc, char **argv)
     g_autofree char *menu = NULL, *menu_highlight = NULL;
     g_autofree char *font = NULL, *icons = NULL, *wallpaper = NULL, *mode = NULL;
     g_autofree char *wallpaper_style = NULL;
+    g_autofree char *menu_icon = NULL;
     int seed = 0;
     g_autofree char *output = NULL;
     gboolean from_current = FALSE, force = FALSE, surprise = FALSE;
@@ -243,6 +244,8 @@ static int cmd_new(int argc, char **argv)
         { "icons", 0, 0, G_OPTION_ARG_STRING, &icons, "Icon theme", "NAME" },
         { "wallpaper", 0, 0, G_OPTION_ARG_FILENAME, &wallpaper,
           "Wallpaper (copied into the theme)", "FILE" },
+        { "menu-icon", 0, 0, G_OPTION_ARG_FILENAME, &menu_icon,
+          "Icon of the panel's menu button (copied into the theme)", "FILE" },
         { "wallpaper-mode", 0, 0, G_OPTION_ARG_STRING, &mode,
           "zoom, fit, stretch, center, tile or color", "MODE" },
         { "wallpaper-style", 0, 0, G_OPTION_ARG_STRING, &wallpaper_style,
@@ -338,6 +341,11 @@ static int cmd_new(int argc, char **argv)
         g_autofree char *absolute = g_canonicalize_filename(wallpaper, NULL);
         lxp_theme_set_string(theme, "Wallpaper", "file", absolute);
         lxp_theme_set_string(theme, "Wallpaper", "mode", mode ? mode : "zoom");
+    }
+
+    if (menu_icon) {
+        g_autofree char *absolute = g_canonicalize_filename(menu_icon, NULL);
+        lxp_theme_set_string(theme, "Panel", "menu_icon", absolute);
     }
 
     if (!lxp_theme_bundle_wallpaper(theme, dir, &error) ||

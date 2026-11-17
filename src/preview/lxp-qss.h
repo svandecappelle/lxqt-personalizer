@@ -20,6 +20,7 @@ typedef struct {
     gboolean          has_button_text;   /* buttons of every plugin */
     LxpColor          button_text;
     const char       *position;          /* the one asked for; not owned */
+    char             *menu_icon;         /* image of the menu button, or NULL */
     LxpPanelTaskStyle task, task_active;
 } LxpPanelQss;
 
@@ -29,6 +30,8 @@ typedef struct {
  */
 void     lxp_panel_qss_parse(const char *qss, const char *dir, const char *position,
                              const LxpPreviewModel *palette, LxpPanelQss *out);
+/* Free what a parsed <qss> owns. */
+void     lxp_panel_qss_clear(LxpPanelQss *qss);
 /* FALSE when <path> cannot be read. */
 gboolean lxp_panel_qss_load(const char *path, const char *position,
                             const LxpPreviewModel *palette, LxpPanelQss *out);

@@ -81,6 +81,7 @@ typedef struct {
     gboolean panel_gradient;     /* panel_bg to panel_bg_to, across the panel */
     LxpColor panel_bg_to;
     LxpPanelTaskStyle panel_task, panel_task_active;
+    char    *panel_menu_icon;    /* image of the menu button, or NULL (icon theme) */
 
     /* Compositor (picom); defaults are picom's */
     int      corner_radius;

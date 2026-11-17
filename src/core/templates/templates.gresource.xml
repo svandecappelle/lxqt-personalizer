@@ -3,6 +3,7 @@
   <gresource prefix="/lxp/templates">
     <file>themerc</file>
     <file>lxqt-panel.qss</file>
+    <file>mainmenu.svg</file>
     <file>lxqt-runner.qss</file>
     <file>lxqt-notificationd.qss</file>
     <file>gtk-fallback.css</file>

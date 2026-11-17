@@ -16,6 +16,12 @@ LXQtPanelPlugin {
     color: {{panel_fg}};
 }
 
+/* Not every icon theme has an icon for the menu button. */
+#MainMenu,
+#FancyMenu {
+    qproperty-icon: url(mainmenu.svg);
+}
+
 LXQtPanelPlugin > QToolButton,
 #QuickLaunch QToolButton,
 #DesktopSwitch QToolButton,

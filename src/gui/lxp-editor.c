@@ -52,6 +52,11 @@ static const char *const tool_button_values[] = {
 };
 
 /* lxqt-panel "alignment": -1, 0, 1 */
+/* [Panel] menu_icon: unset, "theme", or an image file */
+static const char *const menu_icon_sources[] = { "Keep current", "From the LXQt theme",
+                                                 "Image file", NULL };
+enum { MENU_ICON_KEEP, MENU_ICON_THEME, MENU_ICON_FILE };
+
 static const char *const panel_alignments[] = { "Start", "Center", "End", NULL };
 
 static const char *const ansi_names[] = {
@@ -151,6 +156,9 @@ typedef struct {
     GtkWidget *panel_alignment;
     GtkWidget *panel_autohide;
     GtkWidget *panel_reserve;
+    GtkWidget *menu_icon_source;
+    GtkWidget *menu_icon_choose;
+    char *menu_icon;         /* chosen image, absolute */
     GtkWidget *panel_style;
 
     /* Effects */
@@ -187,6 +195,7 @@ static void editor_free(Editor *ed)
     g_free(ed->work_dir);
     g_free(ed->dir);
     g_free(ed->wallpaper);
+    g_free(ed->menu_icon);
     lxp_theme_free(ed->theme);
     for (gsize i = 0; i < G_N_ELEMENTS(choices); i++)
         choice_clear(choices[i]);
@@ -479,6 +488,17 @@ static void update_theme(Editor *ed)
                          gtk_switch_get_active(GTK_SWITCH(ed->panel_autohide)) ? "true" : "false");
     lxp_theme_set_string(t, "Panel", "reserve-space",
                          gtk_switch_get_active(GTK_SWITCH(ed->panel_reserve)) ? "true" : "false");
+    switch (gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->menu_icon_source))) {
+    case MENU_ICON_THEME:
+        lxp_theme_set_string(t, "Panel", "menu_icon", "theme");
+        break;
+    case MENU_ICON_FILE:
+        /* until an image is chosen, the menu button is left alone */
+        lxp_theme_set_string(t, "Panel", "menu_icon", ed->menu_icon);
+        break;
+    default:
+        lxp_theme_set_string(t, "Panel", "menu_icon", NULL);
+    }
 
     set_int(t, "Compositor", "corner_radius", spin_value(ed->corner_radius));
     lxp_theme_set_string(t, "Compositor", "shadow",
@@ -545,6 +565,9 @@ static void sync_sensitivity(Editor *ed)
     {
         gboolean generated = choice_get(&ed->openbox) == NULL;
         gboolean image = gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->wallpaper_source)) == 0;
+
+        gtk_widget_set_sensitive(ed->menu_icon_choose,
+            gtk_drop_down_get_selected(GTK_DROP_DOWN(ed->menu_icon_source)) == MENU_ICON_FILE);
         GtkWidget *window_style[] = { ed->title_style, ed->title_padding, ed->border_width,
                                       ed->title_align, ed->buttons };
 
@@ -843,6 +866,55 @@ static void choose_wallpaper(GtkButton *button, gpointer data)
     gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
     gtk_file_dialog_set_title(dialog, "Choose a Wallpaper");
     gtk_file_dialog_open(dialog, GTK_WINDOW(ed->window), NULL, wallpaper_chosen, ed);
+}
+
+static void set_menu_icon(Editor *ed, const char *path)
+{
+    g_autofree char *base = path ? g_path_get_basename(path) : NULL;
+
+    g_free(ed->menu_icon);
+    ed->menu_icon = g_strdup(path);
+    gtk_button_set_label(GTK_BUTTON(ed->menu_icon_choose), base ? base : "Choose…");
+}
+
+static void menu_icon_chosen(GObject *source, GAsyncResult *res, gpointer data)
+{
+    Editor *ed = data;
+    g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), res, NULL);
+    g_autofree char *path = file ? g_file_get_path(file) : NULL;
+
+    if (!path)
+        return;
+    set_menu_icon(ed, path);
+    schedule_preview(ed);
+}
+
+static void choose_menu_icon(GtkButton *button, gpointer data)
+{
+    Editor *ed = data;
+    g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
+    g_autoptr(GtkFileFilter) filter = gtk_file_filter_new();
+    g_autoptr(GListStore) filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    g_autoptr(GFile) start = NULL;
+
+    gtk_file_filter_set_name(filter, "Icons (SVG, PNG)");
+    gtk_file_filter_add_suffix(filter, "svg");
+    gtk_file_filter_add_suffix(filter, "png");
+    gtk_file_filter_add_suffix(filter, "xpm");
+    gtk_file_filter_add_suffix(filter, "jpg");
+    gtk_file_filter_add_suffix(filter, "jpeg");
+    g_list_store_append(filters, filter);
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+    gtk_file_dialog_set_title(dialog, "Choose a Menu Button Icon");
+    /* the folder of the current image, else where icon themes live */
+    if (ed->menu_icon) {
+        start = g_file_new_for_path(ed->menu_icon);
+        gtk_file_dialog_set_initial_file(dialog, start);
+    } else {
+        start = g_file_new_for_path("/usr/share/icons");
+        gtk_file_dialog_set_initial_folder(dialog, start);
+    }
+    gtk_file_dialog_open(dialog, GTK_WINDOW(ed->window), NULL, menu_icon_chosen, ed);
 }
 
 static void show_error(Editor *ed, const char *message)
@@ -1299,6 +1371,14 @@ static void build_desktop_page(Editor *ed, GtkWidget *box)
     gtk_widget_set_tooltip_text(ed->panel_style, "Task buttons of the generated LXQt theme");
     g_signal_connect(ed->panel_style, "notify::selected", G_CALLBACK(on_changed), ed);
     attach_row(panel, 10, "Task buttons", ed->panel_style, NULL);
+    ed->menu_icon_source = gtk_drop_down_new_from_strings(menu_icon_sources);
+    gtk_widget_set_tooltip_text(ed->menu_icon_source,
+                                "Icon of the application menu button. An image is copied "
+                                "into the theme.");
+    g_signal_connect(ed->menu_icon_source, "notify::selected", G_CALLBACK(on_changed), ed);
+    ed->menu_icon_choose = gtk_button_new_with_label("Choose…");
+    g_signal_connect(ed->menu_icon_choose, "clicked", G_CALLBACK(choose_menu_icon), ed);
+    attach_row(panel, 11, "Menu button icon", ed->menu_icon_source, ed->menu_icon_choose);
     gtk_box_append(GTK_BOX(box), panel);
 }
 
@@ -1524,6 +1604,19 @@ static void load_form(Editor *ed)
                                (guint)(model->panel_alignment + 1));
     gtk_switch_set_active(GTK_SWITCH(ed->panel_autohide), hidable && g_str_equal(hidable, "true"));
     gtk_switch_set_active(GTK_SWITCH(ed->panel_reserve), model->panel_reserve_space);
+    {
+        g_autofree char *icon = lxp_theme_get_string(ed->theme, "Panel", "menu_icon");
+        const char *base = lxp_theme_get_dir(ed->theme) ? lxp_theme_get_dir(ed->theme) : ed->dir;
+        g_autofree char *path = NULL;
+
+        if (icon && !g_str_equal(icon, "theme"))
+            path = g_path_is_absolute(icon) || !base ? g_strdup(icon)
+                                                     : g_build_filename(base, icon, NULL);
+        set_menu_icon(ed, path);
+        gtk_drop_down_set_selected(GTK_DROP_DOWN(ed->menu_icon_source),
+                                   path ? MENU_ICON_FILE : icon ? MENU_ICON_THEME
+                                                                : MENU_ICON_KEEP);
+    }
 
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(ed->corner_radius), model->corner_radius);
     gtk_switch_set_active(GTK_SWITCH(ed->shadows), model->shadow);

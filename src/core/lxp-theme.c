@@ -150,9 +150,14 @@ char *lxp_theme_to_data(const LxpTheme *theme)
     return g_key_file_to_data(theme->kf, NULL, NULL);
 }
 
-gboolean lxp_theme_bundle_wallpaper(LxpTheme *theme, const char *dir, GError **error)
+/*
+ * Copy the absolute file named by <group>/<key> into <dir> as
+ * "<stem>.<ext>", unless it is in there already, and name it relative.
+ */
+static gboolean bundle_file(LxpTheme *theme, const char *dir, const char *group,
+                            const char *key, const char *stem, GError **error)
 {
-    g_autofree char *file = lxp_theme_get_string(theme, "Wallpaper", "file");
+    g_autofree char *file = lxp_theme_get_string(theme, group, key);
     g_autofree char *canonical_dir = NULL;
     g_autofree char *base = NULL;
     g_autofree char *name = NULL;
@@ -165,18 +170,24 @@ gboolean lxp_theme_bundle_wallpaper(LxpTheme *theme, const char *dir, GError **e
     if (g_str_has_prefix(file, canonical_dir) &&
         file[strlen(canonical_dir)] == G_DIR_SEPARATOR) {
         /* already bundled: store it relative again */
-        lxp_theme_set_string(theme, "Wallpaper", "file", file + strlen(canonical_dir) + 1);
+        lxp_theme_set_string(theme, group, key, file + strlen(canonical_dir) + 1);
         return TRUE;
     }
 
     base = g_path_get_basename(file);
     dot = strrchr(base, '.');
-    name = g_strconcat("wallpaper", dot ? dot : "", NULL);
+    name = g_strconcat(stem, dot ? dot : "", NULL);
     dest = g_build_filename(dir, name, NULL);
     if (!lxp_copy_atomic(file, dest, 0644, error))
         return FALSE;
-    lxp_theme_set_string(theme, "Wallpaper", "file", name);
+    lxp_theme_set_string(theme, group, key, name);
     return TRUE;
+}
+
+gboolean lxp_theme_bundle_wallpaper(LxpTheme *theme, const char *dir, GError **error)
+{
+    return bundle_file(theme, dir, "Wallpaper", "file", "wallpaper", error) &&
+           bundle_file(theme, dir, "Panel", "menu_icon", "menu-icon", error);
 }
 
 char *lxp_theme_slugify(const char *name)

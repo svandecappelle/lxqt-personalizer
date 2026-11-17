@@ -130,6 +130,23 @@ static void icon(Ctx *ctx, const char *const *names, double x, double y, double 
     cairo_restore(ctx->cr);
 }
 
+/* Draw the image file <path>; FALSE if there is none or it cannot be read. */
+static gboolean image_icon(Ctx *ctx, const char *path, double x, double y, double size)
+{
+    int px = (int)ceil(size * ctx->device_scale);
+    cairo_surface_t *surface = path ? lxp_image_load(path, px, px) : NULL;
+
+    if (!surface)
+        return FALSE;
+    cairo_save(ctx->cr);
+    cairo_translate(ctx->cr, x, y);
+    cairo_scale(ctx->cr, size / px, size / px);
+    cairo_set_source_surface(ctx->cr, surface, 0, 0);
+    cairo_paint(ctx->cr);
+    cairo_restore(ctx->cr);
+    return TRUE;
+}
+
 #define ICON(...) ((const char *const[]){ __VA_ARGS__, NULL })
 
 /* --- desktop ------------------------------------------------------------ */
@@ -728,8 +745,9 @@ static void draw_panel(Ctx *ctx)
 #define AT(along, size) (horizontal ? p.x + (along) : p.x + off), \
                         (horizontal ? p.y + off : p.y + (along))
 
-    icon(ctx, ICON("start-here", "application-menu", "view-app-grid", "open-menu"),
-         AT(pos, isz), isz);
+    if (!image_icon(ctx, m->panel_menu_icon, AT(pos, isz), isz))
+        icon(ctx, ICON("start-here", "application-menu", "view-app-grid", "open-menu"),
+             AT(pos, isz), isz);
     pos += isz + 14;
     for (gsize i = 0; i < G_N_ELEMENTS(launchers); i++) {
         icon(ctx, launchers[i], AT(pos, isz), isz);

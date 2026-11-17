@@ -14,7 +14,7 @@ covering:
 | `gtk`       | GTK theme, icons, font, dark preference    | `gtk-3.0/settings.ini`, `gtk-4.0/settings.ini`, `~/.gtkrc-2.0` |
 | `cursor`    | cursor theme and size                      | `lxqt/session.conf`, `~/.icons/default`, `~/.Xresources`, GTK  |
 | `wallpaper` | wallpaper file and mode                    | `~/.config/pcmanfm-qt/<profile>/settings.conf`                |
-| `panel`     | position, size, colors, opacity            | `~/.config/lxqt/panel.conf`                                   |
+| `panel`     | position, size, colors, opacity, menu icon | `~/.config/lxqt/panel.conf`                                   |
 | `compositor`| rounded corners, shadows, fading (picom)   | `~/.config/picom.conf`                                        |
 | `kvantum`   | Kvantum theme (with the kvantum style)     | `~/.config/Kvantum/kvantum.kvconfig`                          |
 | `terminal`  | QTerminal color scheme                     | `~/.config/qterminal.org/qterminal.ini`                       |
@@ -106,6 +106,13 @@ so the Win11-like taskbar keeps them on the left.
 - **GTK corners** — the same radius on GTK buttons, fields and popovers.
 - **Panel styles** — task buttons as an underline, pills or flat
   (`panel_style=`), with the generated LXQt theme.
+- **Menu button icon** — any SVG or PNG as the icon of the panel's
+  application menu (*Desktop › Panel › Menu button icon* in the editor,
+  `menu_icon=` in `[Panel]`, or `lxp new --menu-icon FILE`). The image is
+  copied into the theme and travels with exported packs. `menu_icon=theme`
+  hands the button back to the LXQt theme; without the key it is left
+  alone. Generated LXQt themes bring their own menu icon, since not every
+  icon theme has one.
 - **Terminal colors** — a matching QTerminal color scheme for every
   generated theme (`terminal` backend; new terminal windows use it).
   Any of the 16 ANSI colors can be picked in the editor's *Terminal*
@@ -187,7 +194,7 @@ live preview:
   following the colors; GTK icons, font and light/dark variant; cursor
   theme and size;
 - **Desktop** — wallpaper; panel position, size, opacity, icon size, rows,
-  length, alignment, auto-hide and reserved space;
+  length, alignment, auto-hide, reserved space and menu button icon;
 - **Effects** — corner radius, shadows (strength, blur, offsets), inactive
   window opacity, fading (picom).
 

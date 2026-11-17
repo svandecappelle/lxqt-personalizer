@@ -279,7 +279,7 @@ static void button_property(LxpPanelTaskStyle *b, const char *name, const char *
 }
 
 typedef enum {
-    RULE_NONE, RULE_PANEL, RULE_BACKGROUND, RULE_BUTTON, RULE_TASK, RULE_TASK_ON,
+    RULE_NONE, RULE_PANEL, RULE_BACKGROUND, RULE_BUTTON, RULE_TASK, RULE_TASK_ON, RULE_MENU,
 } RuleKind;
 
 /* What <selector> styles, for a panel at <position>. */
@@ -324,6 +324,8 @@ static RuleKind selector_kind(const char *selector, const char *position)
         return RULE_NONE;
     if (n == 1 && g_str_equal(words[0], "#BackgroundWidget"))
         return RULE_BACKGROUND;
+    if (n == 1 && (g_str_equal(words[0], "#MainMenu") || g_str_equal(words[0], "#FancyMenu")))
+        return RULE_MENU;
     /* every button of the panel's plugins, task buttons included */
     if (g_str_equal(words[n - 1], "QToolButton") &&
         (g_str_equal(words[n - 2 > 0 ? n - 2 : 0], "Plugin") ||
@@ -349,6 +351,12 @@ static void apply_declaration(LxpPanelQss *out, RuleKind kind, const char *name,
     LxpColor first, last;
 
     switch (kind) {
+    case RULE_MENU:
+        if (g_str_equal(name, "qproperty-icon") && (image = value_image(value, dir))) {
+            g_free(out->menu_icon);
+            out->menu_icon = g_steal_pointer(&image);
+        }
+        break;
     case RULE_BUTTON:
         if (g_str_equal(name, "color") && value_colors(value, palette, &first, &last)) {
             out->has_button_text = TRUE;
@@ -474,6 +482,11 @@ void lxp_panel_qss_parse(const char *qss, const char *dir, const char *position,
         out->task_active.has_bg = TRUE;
         out->task_active.bg = out->task.bg;
     }
+}
+
+void lxp_panel_qss_clear(LxpPanelQss *qss)
+{
+    g_clear_pointer(&qss->menu_icon, g_free);
 }
 
 gboolean lxp_panel_qss_load(const char *path, const char *position,

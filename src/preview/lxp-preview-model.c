@@ -309,6 +309,9 @@ static gboolean load_installed_panel(LxpPreviewModel *m, const LxpTheme *theme,
     }
     m->panel_task = qss.task;
     m->panel_task_active = qss.task_active;
+    if (!m->panel_menu_icon)
+        m->panel_menu_icon = g_steal_pointer(&qss.menu_icon);
+    lxp_panel_qss_clear(&qss);
     g_free(m->panel_style);
     m->panel_style = g_strdup("theme");
     return TRUE;
@@ -344,6 +347,26 @@ static void load_panel(LxpPreviewModel *m, const LxpTheme *theme)
             m->panel_width = MIN(m->panel_width, 100);
         m->panel_alignment = CLAMP(theme_int(theme, "Panel", "alignment", -1), -1, 1);
         m->panel_reserve_space = !reserve || g_ascii_strcasecmp(reserve, "false") != 0;
+    }
+
+    /* the menu button: the theme's choice, else the LXQt theme's */
+    {
+        g_autofree char *icon = lxp_theme_get_string(theme, "Panel", "menu_icon");
+        g_autofree char *lxqt = lxp_theme_get_string(theme, "LXQt", "theme");
+        const char *dir = lxp_theme_get_dir(theme);
+
+        if (icon && g_path_is_absolute(icon))
+            m->panel_menu_icon = g_steal_pointer(&icon);
+        else if (icon && dir && !g_str_equal(icon, "theme") && !strstr(icon, ".."))
+            m->panel_menu_icon = g_build_filename(dir, icon, NULL);
+        else if (lxqt && g_str_has_prefix(lxqt, "lxp-")) {
+            g_autofree char *found = lxp_backend_locate(theme, "lxqt/themes", lxqt,
+                                                        "mainmenu.svg");
+            if (found)
+                m->panel_menu_icon = g_build_filename(found, "mainmenu.svg", NULL);
+        }
+        if (m->panel_menu_icon && !g_file_test(m->panel_menu_icon, G_FILE_TEST_IS_REGULAR))
+            g_clear_pointer(&m->panel_menu_icon, g_free);
     }
 
     /* Without a panel color, the LXQt theme decides: ours if generated. */
@@ -427,6 +450,7 @@ void lxp_preview_model_free(LxpPreviewModel *m)
     g_free(m->title_font_family);
     g_free(m->panel_position);
     g_free(m->panel_style);
+    g_free(m->panel_menu_icon);
     g_free(m->wallpaper);
     g_free(m->wallpaper_mode);
     g_free(m);
